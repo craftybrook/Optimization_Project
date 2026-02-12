@@ -270,6 +270,7 @@ class OrigamiContainer:
             print(edges)
 
         # TODO: Generate a graph representation of the points, linked by edges, and identify panels as cycles in the graph.
+        # TODO: Consider cases where one line represents many edges, such as in a grid
         panels = edges
         
         self._origami_coords_orig = coords
