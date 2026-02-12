@@ -39,76 +39,6 @@ class OrigamiContainer:
             self._extract_file(origami_filepath, name, verbose)
         else:
             self._extract_pyrepr(coords, panels, name)
-
-    def _extract_file(self, origami_filepath, name, verbose):
-        """
-        Read the filepath for a given origami representation file and interpret it as an OrigamiContainer object.
-        
-        :param origami_filepath: Complete filepath to the origami representation file. Supported file types are:
-            .obj - Wavefront OBJ file
-            .fold - Origami Simulator file
-            .svg - Scalable Vector Graphics file
-            .json - Custom JSON format to represent native python origami representation (outlined in extract_pyrepr docstring)
-        :param name: Custom name to be saved for this origami container. By default, uses the file stem.
-            
-        :return: OrigamiContainer object
-        """
-        self._origami_filepath = origami_filepath
-        filepath = Path(origami_filepath)
-        if isinstance(name, str):
-            self._origami_name = name
-        else:
-            self._origami_name = filepath.stem
-
-        file_extension = filepath.suffix.lower()
-
-        if file_extension == ".obj":
-            self._interpret_obj()
-        elif file_extension == ".fold":
-            self._interpret_fold()
-        elif file_extension == ".svg":
-            self._interpret_svg(verbose)
-        elif file_extension == ".json":
-            self._interpret_json()
-        else:
-            raise ValueError(f"Unsupported file type: {file_extension}. Supported types are: .obj, .fold, .svg, .json")
-
-    def _extract_pyrepr(self, coords, panels, name):
-        """
-        Use an existing origami representation, native to python
-        and used by the SensitivityAnalysis code. Formatted as follows:
-        coords = 
-            [
-                [p1x, p1y, p1z],
-                [p2x, p2y, p2z],
-                ...,
-                [pNx, pNy, pNz],
-            ]
-        panels = 
-            [
-                [p1, p2, p3],
-                [p2, p3, p4],
-                ...,
-                [p3, p4, pN]
-            ]
-        )
-
-        :param coords: list of lists, where each sublist contains 3 numeric values representing the x, y and z coordinates of a point
-        :param panels: list of lists, where each sublist contains integer values representing the indices of points that make up a panel
-        :param name: Custom name to be saved for this origami container. Has a default value.
-        
-        :return: OrigamiContainer object
-        """
-        self._origami_coords_orig = coords
-        self._origami_panels_orig = panels
-        self._origami_coords = coords
-        self._origami_panels = panels
-        if isinstance(name, str):
-            self._origami_name = name
-        else:
-            self._origami_name = "default_pattern_name"
-
-        return self
     
     def visualize_origami(self):
         """
@@ -180,6 +110,76 @@ class OrigamiContainer:
         # TODO: #3 Priority
         raise NotImplementedError
         return
+
+    def _extract_file(self, origami_filepath, name, verbose):
+        """
+        Read the filepath for a given origami representation file and interpret it as an OrigamiContainer object.
+        
+        :param origami_filepath: Complete filepath to the origami representation file. Supported file types are:
+            .obj - Wavefront OBJ file
+            .fold - Origami Simulator file
+            .svg - Scalable Vector Graphics file
+            .json - Custom JSON format to represent native python origami representation (outlined in extract_pyrepr docstring)
+        :param name: Custom name to be saved for this origami container. By default, uses the file stem.
+            
+        :return: OrigamiContainer object
+        """
+        self._origami_filepath = origami_filepath
+        filepath = Path(origami_filepath)
+        if isinstance(name, str):
+            self._origami_name = name
+        else:
+            self._origami_name = filepath.stem
+
+        file_extension = filepath.suffix.lower()
+
+        if file_extension == ".obj":
+            self._interpret_obj()
+        elif file_extension == ".fold":
+            self._interpret_fold()
+        elif file_extension == ".svg":
+            self._interpret_svg(verbose)
+        elif file_extension == ".json":
+            self._interpret_json()
+        else:
+            raise ValueError(f"Unsupported file type: {file_extension}. Supported types are: .obj, .fold, .svg, .json")
+
+    def _extract_pyrepr(self, coords, panels, name):
+        """
+        Use an existing origami representation, native to python
+        and used by the SensitivityAnalysis code. Formatted as follows:
+        coords = 
+            [
+                [p1x, p1y, p1z],
+                [p2x, p2y, p2z],
+                ...,
+                [pNx, pNy, pNz],
+            ]
+        panels = 
+            [
+                [p1, p2, p3],
+                [p2, p3, p4],
+                ...,
+                [p3, p4, pN]
+            ]
+        )
+
+        :param coords: list of lists, where each sublist contains 3 numeric values representing the x, y and z coordinates of a point
+        :param panels: list of lists, where each sublist contains integer values representing the indices of points that make up a panel
+        :param name: Custom name to be saved for this origami container. Has a default value.
+        
+        :return: OrigamiContainer object
+        """
+        self._origami_coords_orig = coords
+        self._origami_panels_orig = panels
+        self._origami_coords = coords
+        self._origami_panels = panels
+        if isinstance(name, str):
+            self._origami_name = name
+        else:
+            self._origami_name = "default_pattern_name"
+
+        return self
     
     def _interpret_obj(self):
         # TODO: #1 Priority
@@ -219,6 +219,8 @@ class OrigamiContainer:
                         edge_pair = (point_count, point_count + 1)
                         edge_list.append(edge_pair)
                         point_count += 2
+
+            # TODO: Implement shape recognition
 
         if verbose:
             print(f"\nExtracted {len(coord_list)} unique coordinates and {len(edge_list)} edges from SVG file.")
