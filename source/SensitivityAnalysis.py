@@ -84,7 +84,6 @@ class SensitivityModel:
 
         return bars
 
-
     def generate_hinges(self):
         """ Detects shared edges and creates a hinge element. """
         hinges = []
@@ -134,7 +133,6 @@ class SensitivityModel:
         
         return hinges
 
-
     def assemble_stiffness_matrix(self):
         """
         Constructs the Global Stiffness Matrix (K_total) by combining:
@@ -179,7 +177,6 @@ class SensitivityModel:
         K_sym = sp.Matrix(np.round(self.total_K, 4)) 
         sp.pretty_print(K_sym)
         
-
     def solve_for_eigenvalues(self):
         """
         Solves the generalized eigenvalue problem: K * v = lambda * v
@@ -200,8 +197,6 @@ class SensitivityModel:
 
         return sorted_eigenvalues, sorted_eigenvectors
     
-
-
     def analyze_sensitivity(self, num_modes_to_check=3, return_mode_index=None): #TODO understand this function better
         """
         Performs analysis on mechanism modes.
@@ -223,7 +218,7 @@ class SensitivityModel:
         if np.any(eigenvalues[:6] > 1e-3):
             print(f"WARNING: Non-zero rigid body modes: {np.round(eigenvalues[:6], 5)}")
         else:
-            print("Pass: Rigid body modes are effectively zero.")
+            print("PASS: Rigid body modes are effectively zero.")
 
         start_index = 6
         print(f"\n--- Mechanism Modes (Checking first {num_modes_to_check}) ---")
@@ -242,12 +237,12 @@ class SensitivityModel:
 
             # Calculate Sensitivity for display
             mode_v = eigenvectors[:, i]
-            # Ensure you use self.J_matrix or self.jacobian_matrix (whichever is in your init)
+            
             sens = self.jacobian_matrix @ mode_v 
             sens_norm = sens / (np.max(np.abs(sens)) + 1e-12)
 
             print(f"\n>> MODE {i+1} (Index {i}) | Energy: {e_val:.5e}")
-            # ... (Print logic omitted for brevity, same as before) ...
+            
 
         # --- Return Logic for Plotting ---
         # 1. Default case (Mode 7 / Index 6)

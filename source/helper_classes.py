@@ -20,9 +20,9 @@ class Node:
         self.coordinates = np.array([x,y,z], dtype=float)
 
 class BarElement:
-    def __init__(self,node_a, node_b, stiffness = 1e5):
+    def __init__(self,node_a, node_b):
         self.nodes = [node_a, node_b]
-        self.stiffness = stiffness # Has really high stiffness to simulate the bars being rigid. We are assuming the panels themselves are ideally rigid. 
+        
         
     def get_compatibility_matrix_row(self,total_DOFs):
         # extract the node coordinates
