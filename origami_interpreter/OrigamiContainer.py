@@ -21,6 +21,11 @@ from pathlib import Path
 
 import svgelements as svg
 import numpy as np
+import shapely.geometry as geom
+from shapely.ops import polygonize
+
+import matplotlib.pyplot as plt
+
 
 class OrigamiContainer:
     def __init__(self, origami_filepath=None, coords=None, panels=None, name=None, verbose=False):
@@ -200,13 +205,14 @@ class OrigamiContainer:
         edge_list = []
         for element in svg_document.elements():
             # Path elements include some of the following
-            #   Guide, Path
+            #   Guide, Path, Shape
             print(type(element), element)
             if isinstance(element, svg.Path):
                 # Path sub-elements are considered PathSegments and can be the following:
                 #   Line, Arc, CubicBezier, QuadraticBezier, Move, Close
+                # however, for the purposes of origami pattern recognition, we will only parse Line segments.
                 for sub_element in element:
-                    print(type(sub_element), sub_element)
+                    #print(type(sub_element), sub_element)
                     if isinstance(sub_element, svg.Line):
                         # Each PathSegment object has a .point(pos) method, where pos=0 produces the start point and pos=1 produces the end point
                         point_start = sub_element.point(0)
@@ -219,8 +225,28 @@ class OrigamiContainer:
                         edge_pair = (point_count, point_count + 1)
                         edge_list.append(edge_pair)
                         point_count += 2
+            elif isinstance(element, svg.Shape):
+                print("Shape element found: ", element)
+                # Shapes include some of the following:
+                #   Circle, Ellipse, Line, Polygon, Polyline, Rect
+                if isinstance(element, svg.SimpleLine):
+                    start = (element.x1, element.y1)
+                    end = (element.x2, element.y2)
+                    coord_list.append(start)
+                    coord_list.append(end)
 
-            # TODO: Implement shape recognition
+                    edge_pair = (point_count, point_count + 1)
+                    edge_list.append(edge_pair)
+                    point_count += 2
+            elif isinstance(element, svg.Polyline):
+                # TODO: Implement Polyline recognition
+                raise NotImplementedError
+            elif isinstance(element, svg.Polygon):
+                # TODO: Implement Polygon recognition
+                raise NotImplementedError
+            elif isinstance(element, svg.Rect):
+                # TODO: Implement Rect recognition
+                raise NotImplementedError
 
         if verbose:
             print(f"\nExtracted {len(coord_list)} unique coordinates and {len(edge_list)} edges from SVG file.")
@@ -261,7 +287,7 @@ class OrigamiContainer:
         coords = []
         for i, keep_point in enumerate(keep_map):
             if keep_point:
-                coords.append(coord_array[i].tolist()+[0])
+                coords.append(coord_array[i].tolist())
             else:
                 edge_array[edge_array > i] -= 1
         edges = edge_array.tolist()
@@ -270,10 +296,19 @@ class OrigamiContainer:
             print(f"\nRemoved duplicate coordinates and updated panel point references accordingly. Final count of unique coordinates is {len(coords)}.")
             print(coords)
             print(edges)
+            
+        # TODO: Plotting the coordinates and edges to visualize the pattern and confirm correctness of the extracted linework
+        if self._verbose:
+            plt.figure()
+            for edge in edges:
+                plt.plot([coords[edge[0]][0], coords[edge[1]][0]], [coords[edge[0]][1], coords[edge[1]][1]], 'k-')
+            plt.scatter([c[0] for c in coords], [c[1] for c in coords], c='r', s=20)
+            plt.axis('equal')
+            plt.show()
 
+        # TODO: Divide edges in cases where one line represents many edges, such as in a grid
         # TODO: Generate a graph representation of the points, linked by edges, and identify panels as cycles in the graph.
-        # TODO: Consider cases where one line represents many edges, such as in a grid
-        panels = edges
+        panels = self._edges_to_panels(coords, edges)
         
         self._origami_coords_orig = coords
         self._origami_panels_orig = panels
@@ -284,4 +319,13 @@ class OrigamiContainer:
         # TODO: #3 Priority
         raise NotImplementedError
         return
+    
+    def _edges_to_panels(self, coords, edges):# Generate panels by polygonizing the edge linework.
+        print("\nGenerating panels by polygonizing the edge linework...")
+        linework = [geom.LineString([coords[a], coords[b]]) for a, b in edges]
+        merged_lines = geom.MultiLineString(linework)
+        print(merged_lines)
+        polygons = list(polygonize(merged_lines))
+        print(polygons)
+        raise NotImplementedError
     
