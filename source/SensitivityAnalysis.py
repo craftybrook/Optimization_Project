@@ -39,41 +39,48 @@ class SensitivityModel:
         constraint_matrix = self.build_constraint_matrix()
 
         # 2. Solve SVD
-        # U, S, Vh = np.linalg.svd(constraint_matrix)
-        # Note: For large matrices, sparse SVD is faster, but for this size, full SVD is fine.
         U, S, Vh = np.linalg.svd(constraint_matrix)
 
-        # 3. Filter for the Mechanism Mode
-        # The null space vectors are at the END of Vh.
-        # Let's look at the last 10 vectors (just to be safe).
-        # We project each candidate vector through the Dihedral Jacobian.
-        
+        # 3. Analyze the Null Space (S ≈ 0)
+        print("\n--- NULL SPACE ANALYSIS (S ≈ 0) ---")
+        print(f"{'Mode Idx':<10} | {'Singular Value (S)':<20} | {'Folding Magnitude':<20} | {'Type'}")
+        print("-" * 75)
+
         best_sensitivity = None
-        max_crease_motion = -1.0
-
-        # Iterate backwards from the last row (smallest singular value)
-        for i in range(1, 10): 
-            # Get the candidate mode (vertex velocities)
-            candidate_mode = Vh[-i, :]
+        max_folding = -1.0
+        
+        # We check every single mode to find the zeros
+        # S is sorted High -> Low, so the zeros are at the end.
+        for i in range(len(S)):
+            s_val = S[i]
             
-            # Calculate how much the creases would move
-            crease_changes = dihedral_jacobian @ candidate_mode
-            
-            # Metric: How much 'total folding' happens?
-            total_folding = np.sum(np.abs(crease_changes))
-            print(f"Total Folding Mode {i} = {total_folding:.6f}")
+            # THRESHOLD: Only look at modes that are effectively zero energy
+            if s_val < 1e-9:
+                vector = Vh[i, :]
+                
+                # Calculate how much this mode folds the hinges
+                crease_changes = dihedral_jacobian @ vector
+                total_folding = np.sum(np.abs(crease_changes))
+                
+                # Classify the mode
+                if total_folding < 1e-5:
+                    mode_type = "Rigid Body (Motion without Folding)"
+                else:
+                    mode_type = "*** MECHANISM *** (Valid Folding)"
+                    
+                    # Track the best mechanism
+                    if total_folding > max_folding:
+                        max_folding = total_folding
+                        best_sensitivity = crease_changes
 
-            # Logic: Rigid body modes have total_folding approx 0.0
-            # Mechanism modes have total_folding > 0.0
-            if total_folding > max_crease_motion:
-                max_crease_motion = total_folding
-                best_sensitivity = crease_changes
+                print(f"{i:<10} | {s_val:.4e}           | {total_folding:.6f}             | {mode_type}")
 
-        # If the best mode we found is still basically zero, the model is rigid (locked).
-        if max_crease_motion < 1e-9:
-            print("WARNING: No mechanism detected. The pattern appears to be rigid.")
-            return np.zeros(len(self.hinges))
-
+        print("-" * 75)
+        
+        if best_sensitivity is None:
+             print("WARNING: No mechanism detected in the Null Space.")
+             return np.zeros(len(self.hinges))
+             
         return best_sensitivity
 
     def build_dihedral_jacobian(self):
@@ -280,39 +287,35 @@ class SensitivityModel:
             hinges.append(HingeElement(node_i, node_j, node_k, node_l, assignment))
         
         return hinges
- 
+    
     def plot_pattern(self, sensitivity_vector=None, show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
         plt.close('all') 
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
-        # --- Process Colors ---
-        # Default to blue (0.0) if no data provided
+        # --- Process Data ---
         plot_sens = np.zeros(len(self.hinges))
         
         if sensitivity_vector is not None:
-            # Flatten to ensure 1D array
-            sens_abs = np.abs(np.array(sensitivity_vector).flatten())
+            # Flatten but KEEP THE SIGNS
+            plot_sens = np.array(sensitivity_vector).flatten()
             
-            if normalize:
-                # OLD WAY: Scale everything 0 to 1
-                max_val = np.max(sens_abs)
-                if max_val > 1e-12:
-                    plot_sens = sens_abs / max_val
-            else:
-                # NEW WAY: Use raw values
-                plot_sens = sens_abs
-        
-        # Create Color Map (Coolwarm: Blue=Low, Red=High)
-        cmap = plt.cm.coolwarm
-        
-        # If not normalizing, we need to fix the colorbar scale manually
+        # Determine the maximum absolute value to center the colorbar
+        max_abs_val = np.max(np.abs(plot_sens))
+        if max_abs_val < 1e-12: max_abs_val = 1.0
+
+        # --- Normalization Strategy ---
         if normalize:
-            norm = plt.Normalize(0, 1)
+            # Scale -1.0 to +1.0
+            plot_sens = plot_sens / max_abs_val
+            limit = 1.0
         else:
-            # Scale from 0 to whatever the max real value is
-            max_val = np.max(plot_sens) if len(plot_sens) > 0 else 1.0
-            norm = plt.Normalize(0, max_val)
+            # Keep raw values
+            limit = max_abs_val
+
+        # --- REVERSED COLOR MAP (Negative=Red, Positive=Blue) ---
+        cmap = plt.cm.coolwarm_r  # <--- The "_r" reverses the gradient
+        norm = plt.Normalize(-limit, limit)
 
         # --- Plot Nodes & Bars ---
         xs = [n.coordinates[0] for n in self.nodes]
@@ -336,28 +339,24 @@ class SensitivityModel:
             
             raw_val = plot_sens[h_id]
             
-            # 1. Get Color (Mapped to Value)
+            # 1. Get Color (Now inverted: Neg=Red, Pos=Blue)
             color = cmap(norm(raw_val))
 
-            # 2. Get Width (CONSTANT)
-            width = 5.0 
+            # 2. Constant Width
+            width = 3.0
 
             # 3. Plot
             ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]], 
                     color=color, linestyle='-', linewidth=width, alpha=0.9)
 
             # 4. Label
-            max_val = np.max(plot_sens) if np.max(plot_sens) > 0 else 1.0
-            relative_intensity = raw_val / max_val
-            
-            if show_hinge_labels and relative_intensity > 0.1:
+            if show_hinge_labels and abs(raw_val) > (0.1 * limit):
                 mid = (p_j + p_k) / 2
                 
                 label_text = f"H{h_id}"
                 if not normalize:
                     label_text += f"\n{raw_val:.2f}"
                 
-                # THIS WAS THE BROKEN LINE:
                 ax.text(mid[0], mid[1], mid[2], label_text, 
                         color=color, fontsize=9, fontweight='bold',
                         path_effects=[plt.matplotlib.patheffects.withStroke(linewidth=2, foreground="white")])
@@ -372,10 +371,12 @@ class SensitivityModel:
         
         ax.set_title(title)
         
+        # Colorbar
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, shrink=0.5)
-        label = 'Relative Sensitivity (0-1)' if normalize else 'Hinge Motion (Radians per Mode Step)'
+        
+        label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Motion (Radians)'
         cbar.set_label(label, rotation=270, labelpad=15)
 
         plt.show()

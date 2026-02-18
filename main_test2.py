@@ -3,7 +3,7 @@ from source.SensitivityAnalysis import SensitivityModel
 if __name__ == "__main__":
     # 1. Define the path to your .fold file
     # Make sure this file is in the same folder, or provide the full path
-    filename = "BirdsFoot.fold" 
+    filename = "BirdsFoot2.fold" 
 
     try:
         print(f"Loading {filename}...")
