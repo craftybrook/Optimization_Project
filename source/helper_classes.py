@@ -73,7 +73,10 @@ class HingeElement:
         self.fold_assignment = fold_assignment # a hinge will be assigned Mountian or Valley
         
     def calculate_vectors(self):
-        """ calculates/intializes several vectors used in this class to reduce duplicate code """
+        """ 
+        calculates/intializes several vectors used in this class to reduce duplicate code
+        just helper fucntion
+        """
 
         # Vector for the hinge line (intersection between the panels)
         self.hinge_line_vector = self.node_k.coordinates - self.node_j.coordinates
@@ -90,7 +93,7 @@ class HingeElement:
         self.panel_1_normal_vector = np.cross(self.r_ji, self.hinge_line_vector)
         self.panel_2_normal_vector = np.cross(self.hinge_line_vector, self.r_jl)
 
-    def calculate_dihedral_angle(self): 
+    def calculate_dihedral_angle(self): # used this to help me numerically validate the Jacobian calculations, not used in the final code
         """The dihedral angle is the angle between two planes, 
             we find this by finding the angle between the vectors normal to each plane"""
         
