@@ -1,49 +1,26 @@
 from source.SensitivityAnalysis import SensitivityModel
 
 if __name__ == "__main__":
+    # 1. Define the path to your .fold file
+    # Make sure this file is in the same folder, or provide the full path
+    filename = "BirdsFoot.fold" 
 
-    # =========================
-    # NODE COORDINATES
-    # =========================
-    coords = [
-    [0.0, 0.0, 0.0],  # 0 bottom-left
-    [1.0, 0.0, 0.0],  # 1 bottom-mid
-    [2.0, 0.0, 0.0],  # 2 bottom-right
+    try:
+        print(f"Loading {filename}...")
+        
+        # 2. Initialize the Model
+        model = SensitivityModel(filename)
+        print(f"Model Loaded: {len(model.nodes)} Nodes, {len(model.hinges)} Hinges detected.")
 
-    [0.0, 1.0, 0.0],  # 3 mid-left
-    [1.0, 1.0, 0.0],  # 4 center
-    [2.0, 1.0, 0.0],  # 5 mid-right
+        # 3. Run Analysis
+        print("Solving SVD...")
+        sensitivity = model.analyze_sensitivity()
 
-    [0.0, 2.0, 0.0],  # 6 top-left
-    [1.0, 2.0, 0.0],  # 7 top-mid
-    [2.0, 2.0, 0.0],  # 8 top-right
-]
-    # =========================
-    # PANEL DEFINITIONS
-    # =========================
-    panel_indices = [
-    # Bottom row
-    [0, 1, 4,3],
+        # 4. Visualize
+        print("Plotting results...")
+        model.plot_pattern(sensitivity, title=f"Sensitivity Analysis: {filename}")
 
-    [1, 2, 5],
-    [1, 5, 4],
-
-    # Top row
-    [3, 4, 7],
-    [3, 7, 6],
-
-    [4, 5, 8],
-    [4, 8, 7],
-]
-
-    model = SensitivityModel(coords, panel_indices)
-
-    print("\n==== COMPLEX ORIGAMI PATCH ====")
-    print(f"Nodes:   {len(model.nodes)}")
-    print(f"Panels:  {len(model.panels)}")
-    print(f"Bars:    {len(model.bars)}")
-    print(f"Hinges:  {len(model.hinges)}")
-    
-    model.analyze_sensitivity()
-    model.plot_pattern()
-    
+    except FileNotFoundError:
+        print(f"ERROR: Could not find file '{filename}'. Check your path.")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")

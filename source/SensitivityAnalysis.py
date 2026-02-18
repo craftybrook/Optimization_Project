@@ -1,6 +1,7 @@
 import numpy as np
 import sympy as sp
 import itertools
+import json
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as PathEffects
 from scipy.linalg import eigh
@@ -15,19 +16,161 @@ except ModuleNotFoundError:
 
 """
 This is the meat of this script
-January 2026
+Febuaray 2026
 Jake Sutton
 """
 
 class SensitivityModel:
-    def __init__(self, coordinates, panel_indices):
-        self.nodes, self.panels = self.generate_geometry(coordinates, panel_indices)
+    def __init__(self, fold_file_path):
+        """ Upon initializing this class makes the origami pattern, then adds the bars between
+        nodes in a panel to make it rigid, and also slaps on some hinges. Telling it where the hignes
+        are is helpful for calculatring the dihedral angle jacobian. """
+        self.coordinates, self.panel_indices, self.crease_info = self.extract_pattern_data_from_fold_file(fold_file_path)
+
+        self.nodes, self.panels = self.generate_geometry(self.coordinates, self.panel_indices)
 
         self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
-        self.total_K = None
+        
+        
+    def analyze_sensitivity(self):
+        # 1. Build Matrices
+        dihedral_jacobian = self.build_dihedral_jacobian()
+        constraint_matrix = self.build_constraint_matrix()
+
+        # 2. Solve SVD
+        # U, S, Vh = np.linalg.svd(constraint_matrix)
+        # Note: For large matrices, sparse SVD is faster, but for this size, full SVD is fine.
+        U, S, Vh = np.linalg.svd(constraint_matrix)
+
+        # 3. Filter for the Mechanism Mode
+        # The null space vectors are at the END of Vh.
+        # Let's look at the last 10 vectors (just to be safe).
+        # We project each candidate vector through the Dihedral Jacobian.
+        
+        best_sensitivity = None
+        max_crease_motion = -1.0
+
+        # Iterate backwards from the last row (smallest singular value)
+        for i in range(1, 10): 
+            # Get the candidate mode (vertex velocities)
+            candidate_mode = Vh[-i, :]
+            
+            # Calculate how much the creases would move
+            crease_changes = dihedral_jacobian @ candidate_mode
+            
+            # Metric: How much 'total folding' happens?
+            total_folding = np.sum(np.abs(crease_changes))
+            print(f"Total Folding Mode {i} = {total_folding:.6f}")
+
+            # Logic: Rigid body modes have total_folding approx 0.0
+            # Mechanism modes have total_folding > 0.0
+            if total_folding > max_crease_motion:
+                max_crease_motion = total_folding
+                best_sensitivity = crease_changes
+
+        # If the best mode we found is still basically zero, the model is rigid (locked).
+        if max_crease_motion < 1e-9:
+            print("WARNING: No mechanism detected. The pattern appears to be rigid.")
+            return np.zeros(len(self.hinges))
+
+        return best_sensitivity
+
+    def build_dihedral_jacobian(self):
+        number_of_hinges = len(self.hinges)
+        number_of_nodes = len(self.nodes)
+        total_DOFs = 3 * number_of_nodes
+
+        dihedral_jacobian = np.zeros((number_of_hinges, total_DOFs))
+
+        for i, hinge in enumerate(self.hinges):
+            dihedral_jacobian[i,:] = hinge.get_jacobian_row(total_DOFs)
+
+        return dihedral_jacobian
+    
+    def build_constraint_matrix(self):
+        """
+        Builds the constraint matrix (from the bars)
+        """
+        number_of_bars = len(self.bars)
+        number_of_nodes = len(self.nodes)
+        total_DOFs = 3 * number_of_nodes
+
+        constraint_matrix = np.zeros((number_of_bars, total_DOFs))
+
+        for i, bar in enumerate(self.bars):
+            constraint_matrix[i, :] = bar.get_compatibility_matrix_row(total_DOFs)
+
+        return constraint_matrix
+
+    def extract_pattern_data_from_fold_file(self, fold_file_path):
+        """
+        Parses a .fold file and yanks the data from it. 
+
+        Returns a type list of [x,y,z] coords
+        panel_indices type list
+        crease_lines (set)
+        """
+        with open(fold_file_path, 'r') as file:
+            data = json.load(file)
+
+        # extract coordinates
+        coordinates = data['vertices_coords']
+        #if z-coord is missing, add zero for z coord
+        if len(coordinates[0]) == 2:
+            coordinates = [[c[0], c[1], 0.0] for c in coordinates]
+
+        # extract panel indices
+        panel_indices = data['faces_vertices']
+
+        # extract crease lines
+        # M = mountian V = valley B = boundry U = unassigned
+        crease_info = {}
+        if 'edges_vertices' in data and 'edges_assignment' in data:
+            for edge, assignment in zip(data['edges_vertices'], data['edges_assignment']):
+                # Filter for Mountains and Valleys only
+                if assignment in ['M', 'V']: 
+                    # Sort indices so (1,2) is the same as (2,1)
+                    u, v = sorted(edge)
+                    crease_info[(u, v)] = assignment
+
+                    """
+                    crease_info is a dictionary that looks like this:
+                    {
+                    (13, 14): "M",  # From Index 1
+                    (3, 15): "M",   # From Index 2
+                    ...
+                    (11, 21): "V"   # From Index 50
+                    }
+                    """
+
+        return coordinates, panel_indices, crease_info
 
     def generate_geometry(self,coordinates, panel_indices):
+        """ Generates the node objects and the panel obejects.
+        These are simple object. See helper_classes to look at them."""
+        
+        nodes = self.generate_nodes(coordinates)
+        panels = self.generate_panels(nodes,panel_indices)
+
+        return nodes, panels
+    
+    def generate_panels(self, nodes, panel_indices):
+        # This loop assigns nodes to different panels
+        panels = []
+        for i, idxs in enumerate(panel_indices):
+            """ We look up the Node objects using the indices provided.
+            If panel 1 uses node index 2, and panel 2 uses node index 2,
+            they both get the EXACT SAME Node object from memory. 
+            This makes sure that if Node 2 moves, it moves for both panels"""
+
+            p_nodes = [nodes[k] for k in idxs]
+            panels.append(Panel(i, p_nodes))
+
+            
+        return panels
+
+    def generate_nodes(self, coordinates):
         """ Coordinates: List of [X,Y,Z] for every unique vertex (node)
         panel_indices: List of lists, e.g., [[0,1,2], [0,2,3,4]]
         This handles n-sides polygon panels"""
@@ -44,18 +187,7 @@ class SensitivityModel:
             nodes.append(new_node)
             count += 1
 
-        # This loop assigns nodes to different panels
-        panels = []
-        for i, idxs in enumerate(panel_indices):
-            """ We look up the Ndoe objects using the indices provided.
-            If panel 1 uses node index 2, and panel 2 uses node index 2,
-            they both get the EXACT SAME Node object from memory. 
-            This makes sure that if Node 2 moves, it moves for both panels"""
-
-            p_nodes = [nodes[k] for k in idxs]
-            panels.append(Panel(i, p_nodes))
-
-        return nodes, panels
+        return nodes
 
     def generate_bars(self):
         """ 
@@ -86,11 +218,14 @@ class SensitivityModel:
 
     def generate_hinges(self):
         """ Detects shared edges and creates a hinge element. """
+        # TODO: make it so that it only puts a hinge where we tell it there is a hinge, not at every shared edge
+
         hinges = []
 
         # map edges to panels
         edge_to_panels = {}
 
+        # this loops checks to see if an edge has panels touching it already
         for panel in self.panels:
             number_nodes = len(panel.nodes)
             for i in range(number_nodes):
@@ -105,7 +240,7 @@ class SensitivityModel:
         for edge_key, panel_list in edge_to_panels.items():
             count = len(panel_list)
 
-            if count > 2:
+            if count > 2: # if there is more than 2 panels on an edge, something is wrong
                 panel_ids = [panel.id for panel in panel_list]
                 raise ValueError(f"TOPOLOGY ERROR: Edge between Nodes {edge_key} is shared by {count} panels "
                     f"(Panels: {panel_ids}).\n"
@@ -115,6 +250,19 @@ class SensitivityModel:
             # if only 1 panel, its a free edge and no hinge is needed there
             if count < 2:
                 continue
+
+            # Default assignment if no dictionary is provided
+            assignment = 'U' 
+
+            # If we have the dictionary from the .fold file...
+            if hasattr(self, 'crease_info') and self.crease_info is not None:
+                # Check if this edge exists in our "Valid Creases" list
+                if edge_key in self.crease_info:
+                    assignment = self.crease_info[edge_key] # assignment should be grabbing an "M" or a "V", and then assiging it to the hinge.
+                else:
+                    # If it's NOT in the dictionary, it's likely a Boundary ('B')
+                    # that we filtered out in the parser. Skip it!
+                    continue
 
             # This logic below is if there are just 2 panels, we create a hinge
             panel1 = panel_list[0]
@@ -129,175 +277,42 @@ class SensitivityModel:
             node_i = next(n for n in panel1.nodes if n.id not in edge_key)
             node_l = next(n for n in panel2.nodes if n.id not in edge_key)
 
-            hinges.append(HingeElement(node_i, node_j, node_k, node_l))
+            hinges.append(HingeElement(node_i, node_j, node_k, node_l, assignment))
         
         return hinges
-
-    def assemble_stiffness_matrix(self):
-        """
-        Constructs the Global Stiffness Matrix (K_total) by combining:
-        1. Bar Stiffness (Stretching energy) -> K_bars
-        2. Hinge Stiffness (Folding energy) -> K_hinges
-        """
-        num_dof = len(self.nodes) * 3
-        num_bars = len(self.bars)
-        num_hinges = len(self.hinges)
-
-        # 1. Intialize Compatibility Matrix and Bar Stiffness matrix (which is diagonal)
-        # Compatibility Matrix dimensions: [Number of Bars x Total DOFs]
-        self.compatibility_matrix = np.zeros((num_bars, num_dof)) 
-        bar_stiffness_matrix = np.zeros(num_bars)
-
-        for i, bar in enumerate(self.bars):
-            self.compatibility_matrix[i, :] = bar.get_compatibility_matrix_row(num_dof)
-            bar_stiffness_matrix[i] = bar.stiffness
-
-        # 2. Build Jacobian Matrix and Hinge Stiffness (which is diagonal)
-        # Jacobian Matrix dimensions: [Number of Hinges x Total DOFs]
-        self.jacobian_matrix = np.zeros((num_hinges, num_dof))
-        hinge_stiffness_matrix = np.zeros(num_hinges)
-
-        for i, hinge in enumerate(self.hinges):
-            self.jacobian_matrix[i, :] = hinge.get_jacobian_row(num_dof)
-            hinge_stiffness_matrix[i] = hinge.stiffness
-
-        # Matrix Multiplication and addition to get K_total 
-        # We use np.diag() to turn the 1D stiffness arrays into diagonal matrices
-        K_bars = self.compatibility_matrix.T @ np.diag(bar_stiffness_matrix) @ self.compatibility_matrix
-        K_hinges = self.jacobian_matrix.T @ np.diag(hinge_stiffness_matrix) @ self.jacobian_matrix
-
-        total_K = K_bars + K_hinges
-        return total_K
-
-    def print_stiffness_matrix(self):
-        sp.init_printing(use_unicode=True)
-        if getattr(self, 'total_K', None) is None:
-            print("Total K not found. Assembling now...")
-            self.total_K = self.assemble_stiffness_matrix()
-        K_sym = sp.Matrix(np.round(self.total_K, 4)) 
-        sp.pretty_print(K_sym)
-        
-    def solve_for_eigenvalues(self):
-        """
-        Solves the generalized eigenvalue problem: K * v = lambda * v
-        Returns sorted eigenvalues and eigenvectors.
-        """
-        if getattr(self, 'total_K', None) is None:
-            self.total_K = self.assemble_stiffness_matrix()
-
-
-        # Solve for eigenvalues (eigh is optimized for symmetric/Hermitian matrices)
-        eigenvalues, eigenvectors = eigh(self.total_K)
-
-        # Sort results (smallest eigenvalues first)
-        # The index array 'idx' tells us how to re-order the vectors to match the values
-        idx = np.argsort(eigenvalues)
-        sorted_eigenvalues = eigenvalues[idx]
-        sorted_eigenvectors = eigenvectors[:, idx]
-
-        return sorted_eigenvalues, sorted_eigenvectors
-    
-    def analyze_sensitivity(self, num_modes_to_check=3, return_mode_index=None): #TODO understand this function better
-        """
-        Performs analysis on mechanism modes.
-        
-        Arguments:
-        - num_modes_to_check: Number of modes to print details for.
-        - return_mode_index: (int or list) 
-             If int: returns sensitivity of that specific mode (e.g., 6).
-             If list: returns the SUM of sensitivities of those modes (e.g., [6, 7]).
-             If None: returns the primary mechanism mode (Mode 7/Index 6).
-        """
-        eigenvalues, eigenvectors = self.solve_for_eigenvalues()
-        
-        print("\n" + "="*40)
-        print("      EIGENVALUE ANALYSIS RESULTS")
-        print("="*40)
-        
-        # Rigid Body Check
-        if np.any(eigenvalues[:6] > 1e-3):
-            print(f"WARNING: Non-zero rigid body modes: {np.round(eigenvalues[:6], 5)}")
-        else:
-            print("PASS: Rigid body modes are effectively zero.")
-
-        start_index = 6
-        print(f"\n--- Mechanism Modes (Checking first {num_modes_to_check}) ---")
-        
-        # --- Print Info Loop ---
-        for i in range(start_index, start_index + num_modes_to_check):
-            if i >= len(eigenvalues): break
-            e_val = eigenvalues[i]
-            
-            # Degeneracy Check
-            if i > start_index:
-                prev_val = eigenvalues[i-1]
-                ratio = abs(e_val - prev_val) / (prev_val + 1e-12)
-                if ratio < 0.01:
-                    print(f"   [!] ALERT: Mode {i+1} is DEGENERATE with Mode {i}")
-
-            # Calculate Sensitivity for display
-            mode_v = eigenvectors[:, i]
-            
-            sens = self.jacobian_matrix @ mode_v 
-            sens_norm = sens / (np.max(np.abs(sens)) + 1e-12)
-
-            print(f"\n>> MODE {i+1} (Index {i}) | Energy: {e_val:.5e}")
-            
-
-        # --- Return Logic for Plotting ---
-        # 1. Default case (Mode 7 / Index 6)
-        target_indices = [6] 
-        
-        # 2. User specified specific mode or combination
-        if return_mode_index is not None:
-            if isinstance(return_mode_index, int):
-                target_indices = [return_mode_index]
-            elif isinstance(return_mode_index, list):
-                target_indices = return_mode_index
-
-        # Calculate Combined Sensitivity
-        combined_sensitivity = np.zeros(self.jacobian_matrix.shape[0])
-        
-        print(f"\n--- Returning Sensitivity for Mode(s): {target_indices} ---")
-        for idx in target_indices:
-            if idx < len(eigenvalues):
-                # We add the ABSOLUTE sensitivity vectors to visualize total motion area
-                # (Or you can add signed vectors if you want to see cancellation)
-                v = eigenvectors[:, idx]
-                s = self.jacobian_matrix @ v
-                combined_sensitivity += np.abs(s) 
-            else:
-                print(f"Error: Mode index {idx} out of bounds.")
-
-        # Final Normalization
-        max_val = np.max(np.abs(combined_sensitivity))
-        if max_val > 1e-9:
-            combined_sensitivity /= max_val
-            
-        return combined_sensitivity
-        
-    def plot_pattern(self, sensitivity_vector=None, show_node_labels=True, show_hinge_labels=True, title="Pattern"):
-        """
-        Visualizes the mechanism with Blue-to-Red sensitivity mapping.
-        """
+ 
+    def plot_pattern(self, sensitivity_vector=None, show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
         plt.close('all') 
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
         # --- Process Colors ---
         # Default to blue (0.0) if no data provided
-        norm_sens = np.zeros(len(self.hinges))
+        plot_sens = np.zeros(len(self.hinges))
         
         if sensitivity_vector is not None:
-            sens_abs = np.abs(sensitivity_vector)
-            max_val = np.max(sens_abs)
+            # Flatten to ensure 1D array
+            sens_abs = np.abs(np.array(sensitivity_vector).flatten())
             
-            if max_val > 1e-12:
-                # Normalize 0.0 to 1.0
-                norm_sens = sens_abs / max_val
+            if normalize:
+                # OLD WAY: Scale everything 0 to 1
+                max_val = np.max(sens_abs)
+                if max_val > 1e-12:
+                    plot_sens = sens_abs / max_val
+            else:
+                # NEW WAY: Use raw values
+                plot_sens = sens_abs
         
         # Create Color Map (Coolwarm: Blue=Low, Red=High)
         cmap = plt.cm.coolwarm
+        
+        # If not normalizing, we need to fix the colorbar scale manually
+        if normalize:
+            norm = plt.Normalize(0, 1)
+        else:
+            # Scale from 0 to whatever the max real value is
+            max_val = np.max(plot_sens) if len(plot_sens) > 0 else 1.0
+            norm = plt.Normalize(0, max_val)
 
         # --- Plot Nodes & Bars ---
         xs = [n.coordinates[0] for n in self.nodes]
@@ -315,28 +330,39 @@ class SensitivityModel:
             ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], 
                     color='black', alpha=0.3, linewidth=1)
 
-        # --- Plot Hinges with Color Scale ---
+        # --- Plot Hinges ---
         for h_id, h in enumerate(self.hinges):
             p_j, p_k = h.node_j.coordinates, h.node_k.coordinates
             
-            intensity = norm_sens[h_id] # 0.0 to 1.0
-            color = cmap(intensity)     # Get RGBA color
+            raw_val = plot_sens[h_id]
             
-            # Thicker lines for active hinges
-            width = 1.0 + (4.0 * intensity) 
-            alpha = 0.4 + (0.6 * intensity)
+            # 1. Get Color (Mapped to Value)
+            color = cmap(norm(raw_val))
 
+            # 2. Get Width (CONSTANT)
+            width = 5.0 
+
+            # 3. Plot
             ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]], 
-                    color=color, linestyle='-', linewidth=width, alpha=alpha)
+                    color=color, linestyle='-', linewidth=width, alpha=0.9)
 
-            if show_hinge_labels and intensity > 0.15: # Only label active hinges
+            # 4. Label
+            max_val = np.max(plot_sens) if np.max(plot_sens) > 0 else 1.0
+            relative_intensity = raw_val / max_val
+            
+            if show_hinge_labels and relative_intensity > 0.1:
                 mid = (p_j + p_k) / 2
-                ax.text(mid[0], mid[1], mid[2], f"H{h_id}", 
-                        color=color, fontsize=10, fontweight='bold',
+                
+                label_text = f"H{h_id}"
+                if not normalize:
+                    label_text += f"\n{raw_val:.2f}"
+                
+                # THIS WAS THE BROKEN LINE:
+                ax.text(mid[0], mid[1], mid[2], label_text, 
+                        color=color, fontsize=9, fontweight='bold',
                         path_effects=[plt.matplotlib.patheffects.withStroke(linewidth=2, foreground="white")])
 
         # --- Formatting ---
-        # Equal aspect ratio hack for 3D
         all_coords = np.array([xs, ys, zs])
         max_range = np.ptp(all_coords, axis=1).max() / 2.0
         mid_x, mid_y, mid_z = np.mean(all_coords[0]), np.mean(all_coords[1]), np.mean(all_coords[2])
@@ -346,10 +372,10 @@ class SensitivityModel:
         
         ax.set_title(title)
         
-        # Add a Colorbar for reference
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(0, 1))
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, shrink=0.5)
-        cbar.set_label('Relative Sensitivity (Abs)', rotation=270, labelpad=15)
+        label = 'Relative Sensitivity (0-1)' if normalize else 'Hinge Motion (Radians per Mode Step)'
+        cbar.set_label(label, rotation=270, labelpad=15)
 
-        plt.show()   
+        plt.show()

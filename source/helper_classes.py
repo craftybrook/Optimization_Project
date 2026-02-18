@@ -23,7 +23,6 @@ class BarElement:
     def __init__(self,node_a, node_b):
         self.nodes = [node_a, node_b]
         
-        
     def get_compatibility_matrix_row(self,total_DOFs):
         # extract the node coordinates
         point1 = self.nodes[0].coordinates
@@ -54,7 +53,7 @@ class BarElement:
         return row_vector
 
 class HingeElement:
-    def __init__(self,node_i, node_j, node_k, node_l, stiffness = 50.0):
+    def __init__(self,node_i, node_j, node_k, node_l,fold_assignment="U"):
         """By convention: j and k are the SHARED nodes (the hinge line)
              and l are the unique nodes on either side"""
         
@@ -70,8 +69,9 @@ class HingeElement:
         self.node_j = node_j
         self.node_k = node_k
         self.node_l = node_l
-        self.stiffness = stiffness # Has much lower stiffness than the bar element because this is the part we are interested in, we want the hignes to move
 
+        self.fold_assignment = fold_assignment # a hinge will be assigned Mountian or Valley
+        
     def calculate_vectors(self):
         """ calculates/intializes several vectors used in this class to reduce duplicate code """
 
