@@ -21,9 +21,10 @@ from pathlib import Path
 
 import svgelements as svg
 import numpy as np
-import shapely.geometry as geom
-from shapely.ops import polygonize
-from shapely import node as make_nodes
+
+from shapely.geometry import Point, LineString, MultiLineString, MultiPoint
+from shapely.ops import split, polygonize_full, transform
+from shapely import node
 
 import matplotlib.pyplot as plt
 
@@ -272,17 +273,23 @@ class OrigamiContainer:
 
         
         print("\nGenerating panels by polygonizing the edge linework...")
-        linework = [geom.LineString([coord_array[a], coord_array[b]]) for a, b in edge_list]
+        linework = [LineString([coord_array[a], coord_array[b]]) for a, b in edge_list]
         print(f"  Unmerged lines count: {len(edge_list)}")
-        merged_lines = geom.MultiLineString(linework)
-        print(merged_lines)
-        print(f"  Merged lines count: {len(merged_lines.geoms)}")
-        split_lines = make_nodes(merged_lines)
-        print(split_lines)
-        print(f"  Split lines count: {len(split_lines.geoms)}")
-        polygons = list(polygonize(split_lines))
-        print(polygons)
-        print(f"  Polygons count: {len(polygons)}")
+        merged_lines = MultiLineString(linework)
+
+        # Calculate tolerance based on standard deviation of points from their average
+        avg_point = np.mean(coord_array, axis=0)
+        deviations = np.linalg.norm(coord_array - avg_point, axis=1)
+        std_deviation = np.std(deviations)
+        tolerance = std_deviation * 0.1  # Use 1% of standard deviation as tolerance
+
+        polygons, dangles, cuts, invalid = robust_polygonize_from_multilines(merged_lines, tolerance)
+
+        print(f"  Polygonization results:")
+        print(f"    Polygons generated: {len(polygons.geoms) if hasattr(polygons, 'geoms') else 0}")
+        print(f"    Dangling lines: {len(dangles.geoms) if hasattr(dangles, 'geoms') else 0}")
+        print(f"    Cut lines: {len(cuts.geoms) if hasattr(cuts, 'geoms') else 0}")
+        print(f"    Invalid geometries: {len(invalid.geoms) if hasattr(invalid, 'geoms') else 0}")
 
         if verbose:
             plt.figure()
@@ -369,3 +376,164 @@ class OrigamiContainer:
         raise NotImplementedError
         return
     
+
+def robust_polygonize_from_multilines(lines: MultiLineString, tol: float):
+    """
+    Robustly polygonize a MultiLineString by explicitly enforcing topology.
+
+    Parameters
+    ----------
+    lines : MultiLineString
+        Input linework representing polygon edges.
+    tol : float
+        Tolerance for snapping and intersection handling.
+
+    Returns
+    -------
+    polygons : GeometryCollection
+    dangles : GeometryCollection
+    cuts : GeometryCollection
+    invalid : GeometryCollection
+    """
+
+    # -------------------------
+    # 1. Collect all endpoints
+    # -------------------------
+    endpoints = []
+    segments = []
+
+    for line in lines.geoms:
+        coords = list(line.coords)
+        endpoints.append(Point(coords[0]))
+        endpoints.append(Point(coords[-1]))
+        segments.append(LineString(coords))
+
+    # -------------------------
+    # 2. Cluster endpoints
+    # -------------------------
+    clustered = cluster_points(endpoints, tol)
+
+    # Map original endpoints → clustered points
+    endpoint_map = {}
+    for p in endpoints:
+        for c in clustered:
+            if p.distance(c) <= tol:
+                endpoint_map[(p.x, p.y)] = c
+                break
+
+    # -------------------------
+    # 3. Snap endpoints onto segments
+    # -------------------------
+    snap_points = set(clustered)
+
+    for p in clustered:
+        for seg in segments:
+            proj = snap_point_to_segment(p, seg, tol)
+            if proj is not None:
+                snap_points.add(proj)
+
+    snap_points = list(snap_points)
+
+    # -------------------------
+    # 4. Split segments explicitly
+    # -------------------------
+    split_lines = []
+
+    for seg in segments:
+        pts_on_seg = []
+        for p in snap_points:
+            if seg.distance(p) <= tol:
+                proj = seg.interpolate(seg.project(p))
+                if proj.distance(p) <= tol:
+                    pts_on_seg.append(proj)
+
+        if pts_on_seg:
+            splitter = MultiPoint(pts_on_seg)
+            parts = split(seg, splitter)
+            split_lines.extend(parts.geoms)
+        else:
+            split_lines.append(seg)
+    
+    print(f"\nAfter snapping and splitting, there are {len(split_lines)} line segments.")
+    graph_edges(MultiLineString(split_lines))
+
+    # -------------------------
+    # 5. Quantize (global snap)
+    # -------------------------
+    eps = tol / 10
+    split_lines = [
+        quantize_geom(l, eps) for l in split_lines
+    ]
+
+    clean_lines = MultiLineString(
+        [list(l.coords) for l in split_lines]
+    )
+
+    print(f"\nAfter quantization with epsilon={eps}, there are {len(clean_lines.geoms)} line segments.")
+    graph_edges(clean_lines)
+
+    # -------------------------
+    # 6. Final noding (safety)
+    # -------------------------
+    clean_lines = node(clean_lines)
+
+    print(f"\nAfter final noding, there are {len(clean_lines.geoms)} line segments.")
+    graph_edges(clean_lines)
+
+    # -------------------------
+    # 7. Polygonize with diagnostics
+    # -------------------------
+    polygons, dangles, cuts, invalid = polygonize_full(clean_lines)
+
+    return polygons, dangles, cuts, invalid
+    
+
+def quantize_geom(geom, eps):
+    return transform(
+        lambda x, y, z=None: (
+            round(x / eps) * eps,
+            round(y / eps) * eps
+        ),
+        geom
+)
+def cluster_points(points, tol):
+    clusters = []
+    for p in points:
+        for c in clusters:
+            if p.distance(c[0]) <= tol:
+                c.append(p)
+                break
+        else:
+            clusters.append([p])
+    return [
+        Point(
+            np.mean([p.x for p in c]),
+            np.mean([p.y for p in c])
+        )
+        for c in clusters
+    ]
+def snap_point_to_segment(p, seg, tol):
+    proj = seg.interpolate(seg.project(p))
+    if proj.distance(p) <= tol:
+        return proj
+    return None
+
+
+def graph_edges(lines: MultiLineString):
+    plt.figure()
+    coords = []
+    for line in lines.geoms:
+        coords.extend(list(line.coords))
+    for line in lines.geoms:
+        coords_list = list(line.coords)
+        x_coords = [c[0] for c in coords_list]
+        y_coords = [c[1] for c in coords_list]
+        plt.plot(x_coords, y_coords, 'k-')
+    plt.scatter([c[0] for c in coords], [c[1] for c in coords], c='r', s=20)
+    
+    # Add labels to points
+    for i, coord in enumerate(coords):
+        plt.text(coord[0] + 0.02, coord[1] + 0.02, str(i), fontsize=8, ha='left')
+    
+    plt.axis('equal')
+    plt.show()
