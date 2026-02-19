@@ -23,6 +23,7 @@ import svgelements as svg
 import numpy as np
 import shapely.geometry as geom
 from shapely.ops import polygonize
+from shapely import node as make_nodes
 
 import matplotlib.pyplot as plt
 
@@ -254,11 +255,10 @@ class OrigamiContainer:
             print(edge_list)
 
         coord_array = np.stack(coord_list)
-        edge_array = np.stack(edge_list)
 
         if verbose:
             plt.figure()
-            for edge in edge_array:
+            for edge in edge_list:
                 plt.plot([coord_array[edge[0]][0], coord_array[edge[1]][0]], [coord_array[edge[0]][1], coord_array[edge[1]][1]], 'k-')
                 plt.scatter([c[0] for c in coord_array], [c[1] for c in coord_array], c='r', s=20)
             
@@ -269,6 +269,35 @@ class OrigamiContainer:
             
             plt.axis('equal')
             plt.show()
+
+        
+        print("\nGenerating panels by polygonizing the edge linework...")
+        linework = [geom.LineString([coord_array[a], coord_array[b]]) for a, b in edge_list]
+        print(f"  Unmerged lines count: {len(edge_list)}")
+        merged_lines = geom.MultiLineString(linework)
+        print(merged_lines)
+        print(f"  Merged lines count: {len(merged_lines.geoms)}")
+        split_lines = make_nodes(merged_lines)
+        print(split_lines)
+        print(f"  Split lines count: {len(split_lines.geoms)}")
+        polygons = list(polygonize(split_lines))
+        print(polygons)
+        print(f"  Polygons count: {len(polygons)}")
+
+        if verbose:
+            plt.figure()
+            for poly in polygons:
+                x, y = poly.exterior.xy
+                plt.plot(x, y, 'b-', linewidth=2)
+                plt.fill(x, y, alpha=0.3)
+            plt.scatter([c[0] for c in coord_array], [c[1] for c in coord_array], c='r', s=20)
+            plt.axis('equal')
+            plt.show()
+
+        
+        
+        raise NotImplementedError
+        edge_array = None
 
         dist_array = np.zeros((len(coord_array), len(coord_array)))
         for i in range(len(coord_array)):
@@ -339,13 +368,4 @@ class OrigamiContainer:
         # TODO: #3 Priority
         raise NotImplementedError
         return
-    
-    def _edges_to_panels(self, coords, edges):# Generate panels by polygonizing the edge linework.
-        print("\nGenerating panels by polygonizing the edge linework...")
-        linework = [geom.LineString([coords[a], coords[b]]) for a, b in edges]
-        merged_lines = geom.MultiLineString(linework)
-        print(merged_lines)
-        polygons = list(polygonize(merged_lines))
-        print(polygons)
-        raise NotImplementedError
     
