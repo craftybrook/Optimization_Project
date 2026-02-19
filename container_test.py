@@ -55,9 +55,9 @@ def main():
     print("Python Representation: ", oc1.get_pyrepr())
     print("Name: ", oc1._origami_name)
 
-    #oc2 = oc(origami_filepath="C:\\Users\\Paul Atreides\\Documents\\CMR\\Origami_Sensitivity_Analysis\\Origami_Sensitivity_Analysis\\pattern_files\\Hex 2.svg", verbose=True)
+    oc2 = oc(origami_filepath="C:\\Users\\Paul Atreides\\Documents\\CMR\\Origami_Sensitivity_Analysis\\Origami_Sensitivity_Analysis\\pattern_files\\Hex 2.svg", verbose=True)
     #oc2 = oc(origami_filepath="C:\\Users\\Paul Atreides\\Documents\\CMR\\Origami_Sensitivity_Analysis\\Origami_Sensitivity_Analysis\\pattern_files\\sample-color-svgrepo-com.svg", verbose=True)
-    oc2 = oc(origami_filepath="C:\\Users\\thetk\\Documents\\BYU\\CMR Labs\\Origami_Sensitivity_Analysis\\Origami_Sensitivity_Analysis\\pattern_files\\Hex 2.svg", verbose=True)
+    #oc2 = oc(origami_filepath="C:\\Users\\thetk\\Documents\\BYU\\CMR Labs\\Origami_Sensitivity_Analysis\\Origami_Sensitivity_Analysis\\pattern_files\\Hex 2.svg", verbose=True)
 
     print("\nOrigamiContainer successfully created from native python representation.")
     print("Object: ", oc2)
