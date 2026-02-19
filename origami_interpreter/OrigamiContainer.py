@@ -256,6 +256,20 @@ class OrigamiContainer:
         coord_array = np.stack(coord_list)
         edge_array = np.stack(edge_list)
 
+        if verbose:
+            plt.figure()
+            for edge in edge_array:
+                plt.plot([coord_array[edge[0]][0], coord_array[edge[1]][0]], [coord_array[edge[0]][1], coord_array[edge[1]][1]], 'k-')
+                plt.scatter([c[0] for c in coord_array], [c[1] for c in coord_array], c='r', s=20)
+            
+            # Add labels to points, offsetting overlapping labels
+            for i, coord in enumerate(coord_array):
+                offset = 0.02 * (np.sum(np.isclose(coord_array, coord, atol=1e-9)) - 1)
+                plt.text(coord[0] + offset, coord[1] + offset, str(i), fontsize=8, ha='left')
+            
+            plt.axis('equal')
+            plt.show()
+
         dist_array = np.zeros((len(coord_array), len(coord_array)))
         for i in range(len(coord_array)):
             for j in range(len(coord_array)):
@@ -298,11 +312,17 @@ class OrigamiContainer:
             print(edges)
             
         # TODO: Plotting the coordinates and edges to visualize the pattern and confirm correctness of the extracted linework
-        if self._verbose:
+        if verbose:
             plt.figure()
             for edge in edges:
                 plt.plot([coords[edge[0]][0], coords[edge[1]][0]], [coords[edge[0]][1], coords[edge[1]][1]], 'k-')
             plt.scatter([c[0] for c in coords], [c[1] for c in coords], c='r', s=20)
+            
+            # Add labels to points, offsetting overlapping labels
+            for i, coord in enumerate(coords):
+                offset = 0.02 * (np.sum(np.isclose(coords, coord, atol=1e-9)) - 1)
+                plt.text(coord[0] + offset, coord[1] + offset, str(i), fontsize=8, ha='left')
+            
             plt.axis('equal')
             plt.show()
 
