@@ -76,11 +76,42 @@ class SensitivityModel:
                 print(f"{i:<10} | {s_val:.4e}           | {total_folding:.6f}             | {mode_type}")
 
         print("-" * 75)
-        
+
         if best_sensitivity is None:
              print("WARNING: No mechanism detected in the Null Space.")
              return np.zeros(len(self.hinges))
-             
+
+        # 4. Pin sign convention using fold assignments from the .fold file.
+        #    SVD eigenvectors are defined up to a global sign flip (+v or -v).
+        #    We resolve this ambiguity by requiring mountain folds (M) to be
+        #    positive — i.e. they activate in the mountain direction.
+        mountain_indices = [i for i, h in enumerate(self.hinges) if h.fold_assignment == 'M']
+        if len(mountain_indices) > 0:
+            if np.sum(best_sensitivity[np.array(mountain_indices)]) < 0:
+                best_sensitivity = -best_sensitivity
+
+        # 5. Validate: every hinge's sensitivity sign should match its .fold assignment.
+        #    Mountain (M) → positive,  Valley (V) → negative.
+        print("\n--- FOLD ASSIGNMENT VALIDATION ---")
+        all_match = True
+        for i, h in enumerate(self.hinges):
+            s_val = best_sensitivity[i]
+            if h.fold_assignment == 'M':
+                match = s_val >= 0
+            elif h.fold_assignment == 'V':
+                match = s_val <= 0
+            else:
+                continue  # skip unassigned hinges
+            status = "✓" if match else "✗ MISMATCH"
+            if not match:
+                all_match = False
+            print(f"  H{i} ({h.fold_assignment}): s = {s_val:+.6f}  {status}")
+        if all_match:
+            print("  All folds are consistent with .fold assignments.")
+        else:
+            print("  WARNING: Some folds are inconsistent with .fold assignments!")
+        print("-" * 40)
+
         return best_sensitivity
 
     def build_dihedral_jacobian(self):
