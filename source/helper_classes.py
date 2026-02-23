@@ -62,7 +62,17 @@ class HingeElement:
         r_ji = node_i.coordinates - node_j.coordinates
         r_jl = node_l.coordinates - node_j.coordinates
 
-        if np.dot(np.cross(e, r_ji), r_jl) < 0:
+        triple = np.dot(np.cross(e, r_ji), r_jl)
+
+        if abs(triple) < 1e-10:
+            # Degenerate case: all nodes are coplanar (e.g. flat/unfolded pattern).
+            # The triple product is identically zero, so the standard check cannot
+            # determine orientation.  Fall back to a global reference: enforce that
+            # n1 = cross(r_ji, e) points in the +z direction.
+            n1 = np.cross(r_ji, e)
+            if np.dot(n1, np.array([0.0, 0.0, 1.0])) < 0:
+                node_i, node_l = node_l, node_i
+        elif triple < 0:
             node_i, node_l = node_l, node_i
 
         self.node_i = node_i
