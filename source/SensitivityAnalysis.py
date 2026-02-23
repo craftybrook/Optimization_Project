@@ -113,7 +113,29 @@ class SensitivityModel:
         print("-" * 40)
 
         return best_sensitivity
-
+    def mountain_valley_check(self, sensitivity_vector):
+        # 5. Validate: every hinge's sensitivity sign should match its .fold assignment.
+        #    Mountain (M) → positive,  Valley (V) → negative.
+        print("\n--- FOLD ASSIGNMENT VALIDATION ---")
+        all_match = True
+        for i, h in enumerate(self.hinges):
+            s_val = sensitivity_vector[i]
+            if h.fold_assignment == 'M':
+                match = s_val >= 0
+            elif h.fold_assignment == 'V':
+                match = s_val <= 0
+            else:
+                continue  # skip unassigned hinges
+            status = "✓" if match else "✗ MISMATCH"
+            if not match:
+                all_match = False
+            print(f"  H{i} ({h.fold_assignment}): s = {s_val:+.6f}  {status}")
+        if all_match:
+            print("  All folds are consistent with .fold assignments.")
+        else:
+            print("  WARNING: Some folds are inconsistent with .fold assignments!")
+        print("-" * 40)
+            
     def build_dihedral_jacobian(self):
         number_of_hinges = len(self.hinges)
         number_of_nodes = len(self.nodes)
