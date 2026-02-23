@@ -5,6 +5,7 @@ import json
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as PathEffects
 from scipy.linalg import eigh
+from matplotlib import animation
 
 #  IMPORT BLOCK
 try:
@@ -39,7 +40,7 @@ class SensitivityModel:
         constraint_matrix = self.build_constraint_matrix()
 
         # 2. Solve SVD
-        U, S, Vh = np.linalg.svd(constraint_matrix)
+        _, singular_values, Vh = np.linalg.svd(constraint_matrix)
 
         # 3. Analyze the Null Space (S ≈ 0)
         print("\n--- NULL SPACE ANALYSIS (S ≈ 0) ---")
@@ -50,30 +51,30 @@ class SensitivityModel:
         max_folding = -1.0
         
         # We check every single mode to find the zeros
-        # S is sorted High -> Low, so the zeros are at the end.
-        for i in range(len(S)):
-            s_val = S[i]
+        # singular_values is sorted High -> Low, so the zeros are at the end.
+        for i in range(len(singular_values)):
+            s_val = singular_values[i]
             
             # THRESHOLD: Only look at modes that are effectively zero energy
             if s_val < 1e-9:
-                vector = Vh[i, :]
+                current_nullspace_vector = Vh[i, :]
                 
                 # Calculate how much this mode folds the hinges
-                crease_changes = dihedral_jacobian @ vector
-                total_folding = np.sum(np.abs(crease_changes))
+                current_crease_changes = dihedral_jacobian @ current_nullspace_vector
+                current_total_folding = np.sum(np.abs(current_crease_changes))
                 
                 # Classify the mode
-                if total_folding < 1e-5:
+                if current_total_folding < 1e-5:
                     mode_type = "Rigid Body (Motion without Folding)"
                 else:
                     mode_type = "*** MECHANISM *** (Valid Folding)"
                     
                     # Track the best mechanism
-                    if total_folding > max_folding:
-                        max_folding = total_folding
-                        best_sensitivity = crease_changes
+                    if current_total_folding > max_folding:
+                        max_folding = current_total_folding
+                        best_sensitivity = current_crease_changes
 
-                print(f"{i:<10} | {s_val:.4e}           | {total_folding:.6f}             | {mode_type}")
+                print(f"{i:<10} | {s_val:.4e}           | {current_total_folding:.6f}             | {mode_type}")
 
         print("-" * 75)
 
@@ -88,31 +89,80 @@ class SensitivityModel:
         mountain_indices = [i for i, h in enumerate(self.hinges) if h.fold_assignment == 'M']
         if len(mountain_indices) > 0:
             if np.sum(best_sensitivity[np.array(mountain_indices)]) < 0:
+                print("FLIPPING SENSITIVITY VECTOR TO MATCH MOUNTAIN FOLD CONVENTION...(we want mountains to be positive)")
                 best_sensitivity = -best_sensitivity
 
-        # 5. Validate: every hinge's sensitivity sign should match its .fold assignment.
-        #    Mountain (M) → positive,  Valley (V) → negative.
-        print("\n--- FOLD ASSIGNMENT VALIDATION ---")
-        all_match = True
-        for i, h in enumerate(self.hinges):
-            s_val = best_sensitivity[i]
-            if h.fold_assignment == 'M':
-                match = s_val >= 0
-            elif h.fold_assignment == 'V':
-                match = s_val <= 0
-            else:
-                continue  # skip unassigned hinges
-            status = "✓" if match else "✗ MISMATCH"
-            if not match:
-                all_match = False
-            print(f"  H{i} ({h.fold_assignment}): s = {s_val:+.6f}  {status}")
-        if all_match:
-            print("  All folds are consistent with .fold assignments.")
-        else:
-            print("  WARNING: Some folds are inconsistent with .fold assignments!")
-        print("-" * 40)
+        self.mountain_valley_check(best_sensitivity)
 
+        # --- This prints all the innards ---
+        self.print_system_matrices(dihedral_jacobian, constraint_matrix, singular_values, Vh, best_sensitivity)
+        mechanism_mode_index = 7 # Based on your table output
+        mechanism_vector = Vh[mechanism_mode_index, :] # Grab that specific row
+        
         return best_sensitivity
+
+    def print_system_matrices(self, dihedral_jacobian, constraint_matrix, singular_values, Vh, sensitivity_vector):
+        """
+        Prints the core matrices with Node DOF column labels and respective row labels.
+        Replaces near-zero values with '0.0' to highlight matrix sparsity.
+        """
+        # 1. Generate Column Labels (Node DOFs: N0_x, N0_y, N0_z, ...)
+        col_labels = []
+        for n in self.nodes:
+            col_labels.extend([f"N{n.id}_x", f"N{n.id}_y", f"N{n.id}_z"])
+
+        # 2. Generate Row Labels
+        bar_labels = [f"Bar {i}" for i in range(len(self.bars))]
+        hinge_labels = [f"Hinge {i}" for i in range(len(self.hinges))]
+        
+        # Helper function for clean, aligned printing
+        def print_labeled_matrix(name, matrix, r_labels, c_labels):
+            print(f"\n--- {name} ---")
+            if len(matrix) == 0:
+                print("Matrix is empty.")
+                return
+                
+            # Dynamic spacing based on label length
+            label_width = max([len(str(lbl)) for lbl in r_labels] + [10])
+            col_width = 8
+            
+            # Print Header
+            header = f"{'':>{label_width}} | " + " | ".join([f"{col:>{col_width}}" for col in c_labels])
+            print(header)
+            print("-" * len(header))
+            
+            # Print Rows
+            for i, row in enumerate(matrix):
+                r_lbl = r_labels[i]
+                # Replace near-zeros with "0.0" for visual clarity
+                row_str = " | ".join([f"{val:>{col_width}.4f}" if abs(val) > 1e-9 else f"{'0.0':>{col_width}}" for val in row])
+                print(f"{r_lbl:>{label_width}} | {row_str}")
+
+        # --- Execute Printing ---
+        print("\n" + "="*100)
+        print("LABELED SYSTEM MATRICES".center(100))
+        print("="*100)
+
+        print_labeled_matrix("CONSTRAINT MATRIX (Bars)", constraint_matrix, bar_labels, col_labels)
+        print_labeled_matrix("DIHEDRAL JACOBIAN (Hinges)", dihedral_jacobian, hinge_labels, col_labels)
+
+        # For Vh (Null Space), we usually only care about the bottom rows where S ≈ 0
+        null_space_rows = Vh[-9:, :] if len(Vh) >= 5 else Vh
+        vh_labels = [f"Mode {len(Vh) - len(null_space_rows) + i}" for i in range(len(null_space_rows))]
+        print_labeled_matrix("NULL SPACE MODES (Last rows of Vh)", null_space_rows, vh_labels, col_labels)
+
+        print("\n--- SELECTED SENSITIVITY VECTOR ---")
+        if sensitivity_vector is not None:
+            # Print vertically so it's easy to read against the specific hinges
+            print(f"{'Hinge':>10} | {'Sensitivity (rad)':>18}")
+            print("-" * 31)
+            for i, val in enumerate(sensitivity_vector):
+                print(f"Hinge {i:>4} | {val:>18.6f}")
+        else:
+            print("None (No valid mechanism found).")
+
+        print("="*100 + "\n")    
+   
     def mountain_valley_check(self, sensitivity_vector):
         # 5. Validate: every hinge's sensitivity sign should match its .fold assignment.
         #    Mountain (M) → positive,  Valley (V) → negative.
@@ -433,3 +483,5 @@ class SensitivityModel:
         cbar.set_label(label, rotation=270, labelpad=15)
 
         plt.show()
+
+    

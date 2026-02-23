@@ -19,6 +19,7 @@ if __name__ == "__main__":
         # 4. Visualize
         print("Plotting results...")
         model.plot_pattern(sensitivity, title=f"Sensitivity Analysis: {filename}")
+        
 
     except FileNotFoundError:
         print(f"ERROR: Could not find file '{filename}'. Check your path.")
