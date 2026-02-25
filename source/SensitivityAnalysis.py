@@ -427,13 +427,32 @@ class SensitivityModel:
             node_k = next(n for n in panel1.nodes if n.id == edge_key[1])
 
             # Identify "Wing" Nodes (i, l) - any node NOT on the axis
-            node_i = next(n for n in panel1.nodes if n.id not in edge_key)
-            node_l = next(n for n in panel2.nodes if n.id not in edge_key)
+            node_i = self.best_wing_node(panel1.nodes, edge_key, node_j, node_k)
+            node_l = self.best_wing_node(panel2.nodes, edge_key, node_j, node_k)
+
 
             hinges.append(HingeElement(node_i, node_j, node_k, node_l, assignment))
         
         return hinges
     
+    def best_wing_node(self, panel_nodes, edge_key, node_j, node_k):
+        """For quad panels, picks the wing node that forms the largest triangle
+        with the hinge edge. For triangles, only one candidate exists."""
+        candidates = [n for n in panel_nodes if n.id not in edge_key]
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        e = node_k.coordinates - node_j.coordinates
+        def area_sq(wing):
+            r = wing.coordinates - node_j.coordinates
+            cross = np.cross(r, e)
+            return np.dot(cross, cross)  # proportional to triangle area²
+        
+        return max(candidates, key=area_sq)
+
+
+
+
     def plot_pattern(self, sensitivity_vector=None, show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
         plt.close('all') 
         fig = plt.figure(figsize=(10, 8))
