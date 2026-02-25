@@ -3,12 +3,13 @@ from source.SensitivityAnalysis import SensitivityModel
 if __name__ == "__main__":
     # 1. Define the path to your .fold file
     # Make sure this file is in the same folder, or provide the full path
-    filename = "BirdsFoot2.fold" 
+    filename = "BirdsFoot1.fold" 
 
     try:
         print(f"Loading {filename}...")
         
         # 2. Initialize the Model
+
         model = SensitivityModel(filename)
         print(f"Model Loaded: {len(model.nodes)} Nodes, {len(model.hinges)} Hinges detected.")
 

@@ -49,11 +49,15 @@ class SensitivityModel:
 
         best_sensitivity = None
         max_folding = -1.0
+        best_mode_idx = None
+        n_sv = len(singular_values)
+        n_dof = Vh.shape[0]
+
         
         # We check every single mode to find the zeros
         # singular_values is sorted High -> Low, so the zeros are at the end.
-        for i in range(len(singular_values)):
-            s_val = singular_values[i]
+        for i in range(n_dof):
+            s_val = singular_values[i] if i < n_sv else 0.0 
             
             # THRESHOLD: Only look at modes that are effectively zero energy
             if s_val < 1e-9:
@@ -73,6 +77,7 @@ class SensitivityModel:
                     if current_total_folding > max_folding:
                         max_folding = current_total_folding
                         best_sensitivity = current_crease_changes
+                        best_mode_idx = i
 
                 print(f"{i:<10} | {s_val:.4e}           | {current_total_folding:.6f}             | {mode_type}")
 
@@ -95,16 +100,16 @@ class SensitivityModel:
         self.mountain_valley_check(best_sensitivity)
 
         # --- This prints all the innards ---
-        self.print_system_matrices(dihedral_jacobian, constraint_matrix, singular_values, Vh, best_sensitivity)
-        mechanism_mode_index = 7 # Based on your table output
-        mechanism_vector = Vh[mechanism_mode_index, :] # Grab that specific row
+        self.print_system_matrices(dihedral_jacobian, constraint_matrix, singular_values, Vh, best_sensitivity, chosen_mode_idx=best_mode_idx)
+        
         
         return best_sensitivity
 
-    def print_system_matrices(self, dihedral_jacobian, constraint_matrix, singular_values, Vh, sensitivity_vector):
+    def print_system_matrices(self, dihedral_jacobian, constraint_matrix, singular_values, Vh, sensitivity_vector, chosen_mode_idx=None):
         """
         Prints the core matrices with Node DOF column labels and respective row labels.
         Replaces near-zero values with '0.0' to highlight matrix sparsity.
+        Dynamically extracts the null space and highlights the chosen mechanism mode.
         """
         # 1. Generate Column Labels (Node DOFs: N0_x, N0_y, N0_z, ...)
         col_labels = []
@@ -146,10 +151,27 @@ class SensitivityModel:
         print_labeled_matrix("CONSTRAINT MATRIX (Bars)", constraint_matrix, bar_labels, col_labels)
         print_labeled_matrix("DIHEDRAL JACOBIAN (Hinges)", dihedral_jacobian, hinge_labels, col_labels)
 
-        # For Vh (Null Space), we usually only care about the bottom rows where S ≈ 0
-        null_space_rows = Vh[-9:, :] if len(Vh) >= 5 else Vh
-        vh_labels = [f"Mode {len(Vh) - len(null_space_rows) + i}" for i in range(len(null_space_rows))]
-        print_labeled_matrix("NULL SPACE MODES (Last rows of Vh)", null_space_rows, vh_labels, col_labels)
+        # --- DYNAMIC NULL SPACE EXTRACTION ---
+        # Find all row indices where the corresponding singular value is effectively zero
+        null_indices = [i for i, s_val in enumerate(singular_values) if s_val < 1e-5]
+        
+        if null_indices:
+            # Extract only those specific rows from Vh
+            null_space_rows = Vh[null_indices, :]
+            
+            # Label each row with its actual index, and tag the chosen one
+            vh_labels = []
+            for idx in null_indices:
+                if chosen_mode_idx is not None and idx == chosen_mode_idx:
+                    vh_labels.append(f"Mode {idx} *** CHOSEN ***")
+                else:
+                    vh_labels.append(f"Mode {idx}")
+                    
+            print_labeled_matrix(f"NULL SPACE MODES (S < 1e-5) - Found {len(null_indices)} modes", 
+                                 null_space_rows, vh_labels, col_labels)
+        else:
+            print("\n--- NULL SPACE MODES ---")
+            print("No zero-energy modes found (Null space is empty).")
 
         print("\n--- SELECTED SENSITIVITY VECTOR ---")
         if sensitivity_vector is not None:
@@ -161,7 +183,7 @@ class SensitivityModel:
         else:
             print("None (No valid mechanism found).")
 
-        print("="*100 + "\n")    
+        print("="*100 + "\n")
    
     def mountain_valley_check(self, sensitivity_vector):
         # 5. Validate: every hinge's sensitivity sign should match its .fold assignment.
@@ -312,17 +334,38 @@ class SensitivityModel:
         unique_edges = set()
         bars = []
 
+        # for panel in self.panels:
+        #     # Connect every node to every other node in this specific panel
+        #     for node_a, node_b in itertools.combinations(panel.nodes,2):
+
+        #         # Sort IDs to ensure Edge(1,2) = Edge (2,1)
+        #         edge_id = tuple(sorted((node_a.id, node_b.id)))
+
+        #         if edge_id not in unique_edges:
+        #             unique_edges.add(edge_id)
+        #             #Add the rigid bar
+        #             bars.append(BarElement(node_a, node_b))
+
         for panel in self.panels:
-            # Connect every node to every other node in this specific panel
-            for node_a, node_b in itertools.combinations(panel.nodes,2):
+            nodes = panel.nodes
+            n = len(nodes)
 
-                # Sort IDs to ensure Edge(1,2) = Edge (2,1)
-                edge_id = tuple(sorted((node_a.id, node_b.id)))
-
+            # 1. All perimeter edges
+            for i in range(n):
+                a, b = nodes[i], nodes[(i + 1) % n]
+                edge_id = tuple(sorted((a.id, b.id)))
                 if edge_id not in unique_edges:
                     unique_edges.add(edge_id)
-                    #Add the rigid bar
-                    bars.append(BarElement(node_a, node_b))
+                    bars.append(BarElement(a, b))
+
+            # 2. Fan diagonals from node 0 to nodes 2, 3, ..., n-2
+            #    (node 0→1 and node 0→n-1 are already perimeter edges)
+            for i in range(2, n - 1):
+                a, b = nodes[0], nodes[i]
+                edge_id = tuple(sorted((a.id, b.id)))
+                if edge_id not in unique_edges:
+                    unique_edges.add(edge_id)
+                    bars.append(BarElement(a, b))
 
         return bars
 
