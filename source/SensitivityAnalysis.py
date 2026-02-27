@@ -35,6 +35,152 @@ class SensitivityModel:
         
         
     def analyze_sensitivity(self):
+        """
+        Identifies the physical folding mechanism via SVD of the mechanism
+        subspace matrix A = J @ Q^T.
+
+        Algorithm
+        ---------
+        1. Build the constraint matrix C (bars) and dihedral Jacobian J (hinges).
+        2. SVD of C → collect every null space mode (σ ≈ 0).
+        3. Classify each null space mode as Rigid Body (J@v ≈ 0) or Mechanism.
+        4. Stack the mechanism modes into basis Q; compute A = J @ Q^T.
+           A[:,r] = fold-angle change vector for null space mode r.
+        5. Build target vector  t:  M → +1,  V → -1,  U → 0.
+        6. SVD of A:  U, S, _ = svd(A).
+           U[:,0] * S[0] is the dominant physical fold mode — the linear
+           combination of null-space displacements that maximises total fold
+           output per unit displacement energy.  This preserves the true
+           geometric fold ratios regardless of how many spurious z-modes exist.
+           M/V assignments are used only to fix the sign of the result.
+        7. Return  best_sensitivity = U[:,0] * S[0]  (sign-corrected).
+        """
+        # 1. Build Matrices
+        dihedral_jacobian = self.build_dihedral_jacobian()
+        constraint_matrix = self.build_constraint_matrix()
+
+
+
+        # 2. Solve SVD
+        _, singular_values, Vh = np.linalg.svd(constraint_matrix)
+        n_dof = Vh.shape[0]
+
+        # 3. Enumerate all null space modes, classify as RBM vs Mechanism
+        mechanism_indices = []   # Vh row indices that actually fold hinges
+
+        for i in range(n_dof):
+            s_val = singular_values[i] if i < len(singular_values) else 0.0 #TODO I think this is not good??
+            if s_val < 1e-9:
+                v             = Vh[i, :]
+                fold_changes  = dihedral_jacobian @ v
+                total_folding = np.sum(np.abs(fold_changes))
+
+                if total_folding < 1e-5:
+                    mode_type = "Rigid Body (Motion without Folding)"
+                else:
+                    mode_type = "*** MECHANISM *** (Valid Folding)"
+                    mechanism_indices.append(i)
+
+
+        if not mechanism_indices:
+            print("WARNING: No mechanism detected in the Null Space.")
+            return np.zeros(len(self.hinges))
+
+        # 4. Build mechanism subspace matrix
+        #    Q[r, :]  = r-th mechanism null space basis vector   (k × n_dof)
+        #    A[:, r]  = fold-angle changes for that mode         (n_hinges × k)
+        Q = Vh[mechanism_indices, :]
+        A = dihedral_jacobian @ Q.T
+
+        # 5. Build target vector from fold assignments
+        t = np.zeros(len(self.hinges))
+        for i, h in enumerate(self.hinges):
+            if h.fold_assignment == 'M':
+                t[i] = +1.0
+            elif h.fold_assignment == 'V':
+                t[i] = -1.0
+        print("\nTarget fold vector (t):")
+        for i, val in enumerate(t):
+            assignment = self.hinges[i].fold_assignment
+            print(f"  Hinge {i:>4} ({assignment}): t = {val:+.1f}")
+
+        # Unassigned hinges stay 0 — they don't influence the selection
+
+        # 6. SVD of A → find the physical mechanism most aligned with M/V assignments.
+        #    A = J @ Q^T  maps null-space displacements to fold-angle changes.
+        #    U[:,r] gives the r-th principal fold pattern (in hinge space).
+        #    S[r]   is the fold magnitude per unit null-space displacement.
+        #
+        #    Selection criterion: pick the mode r whose unit fold pattern U[:,r]
+        #    has the highest cosine similarity with the M/V target t.
+        #    Modes with S[r] ≈ 0 are skipped (negligible fold output).
+        #    If no M/V data exists, fall back to the dominant mode (r=0).
+        U_sv, S_sv, Vt_sv = np.linalg.svd(A, full_matrices=False)
+
+        # Choose the mode whose direction best matches the M/V target.
+        # Skip modes whose fold efficiency is negligible relative to the dominant
+        # mode (relative threshold avoids selecting near-zero spurious modes that
+        # happen to spuriously align with t but carry no physical fold content).
+        if np.linalg.norm(t) > 1e-12:
+            best_r        = 0
+            best_cos      = -1.0
+            rel_threshold = 1e-3 * S_sv[0]   # ignore modes < 0.1 % of dominant σ
+            for r in range(len(S_sv)):
+                if S_sv[r] < rel_threshold:  # skip negligible / degenerate modes
+                    continue
+                cos = np.dot(U_sv[:, r], t) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(t))
+                if abs(cos) > best_cos:      # abs because sign is resolved below
+                    best_cos = abs(cos)
+                    best_r   = r
+        else:
+            best_r = 0                       # no M/V info — default to dominant mode
+
+        # best_sensitivity: fold pattern of the selected mode, scaled by fold efficiency.
+        best_sensitivity = U_sv[:, best_r] * S_sv[best_r]
+
+        # v_dominant: the actual nodal displacement that produces best_sensitivity.
+        v_dominant = Q.T @ Vt_sv[best_r, :]
+
+        # Fix sign (SVD eigenvectors have arbitrary sign; M/V target resolves it).
+        if np.linalg.norm(t) > 1e-12 and np.dot(best_sensitivity, t) < 0:
+            best_sensitivity = -best_sensitivity
+            v_dominant       = -v_dominant
+
+        # Report singular value spectrum, marking the selected mode
+        print(f"\nMechanism subspace singular values (fold efficiency per unit displacement):")
+        for r, sv in enumerate(S_sv):
+            marker = f"  ← selected (best M/V alignment, rank {r})" if r == best_r else ""
+            print(f"  σ_{r} = {sv:.6f}{marker}")
+
+        # Report alignment quality
+        norm_s = np.linalg.norm(best_sensitivity)
+        norm_t = np.linalg.norm(t)
+        if norm_s > 1e-12 and norm_t > 1e-12:
+            cos_sim = np.dot(best_sensitivity, t) / (norm_s * norm_t)
+            quality = 'excellent' if cos_sim > 0.99 else \
+                      'good'      if cos_sim > 0.90 else \
+                      'moderate'  if cos_sim > 0.50 else 'poor'
+            print(f"M/V alignment score (cosine similarity with target): "
+                  f"{cos_sim:.6f}  ({quality})")
+
+        # 7. Validate and report
+        self.mountain_valley_check(best_sensitivity)
+        self.print_system_matrices(dihedral_jacobian, constraint_matrix, singular_values, Vh,
+                                   best_sensitivity,
+                                   mechanism_indices=mechanism_indices,
+                                   Q=Q, A=A,
+                                   U_sv=U_sv, S_sv=S_sv, Vt_sv=Vt_sv,
+                                   v_dominant=v_dominant,
+                                   t=t,
+                                   chosen_mode_idx=best_r)
+        
+        self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
+                                 title="Dominant Folding Mechanism (Sensitivity Vector)",
+                                 normalize=True)
+
+        return best_sensitivity
+    
+    def dead_analyze_sensitivity(self): # old function, may revery back to it. 
         # 1. Build Matrices
         dihedral_jacobian = self.build_dihedral_jacobian()
         constraint_matrix = self.build_constraint_matrix()
@@ -105,85 +251,241 @@ class SensitivityModel:
         
         return best_sensitivity
 
-    def print_system_matrices(self, dihedral_jacobian, constraint_matrix, singular_values, Vh, sensitivity_vector, chosen_mode_idx=None):
+    def print_system_matrices(self, dihedral_jacobian, constraint_matrix, singular_values, Vh,
+                              sensitivity_vector, mechanism_indices=None,
+                              Q=None, A=None, U_sv=None, S_sv=None, Vt_sv=None,
+                              v_dominant=None, t=None, chosen_mode_idx=None):
         """
-        Prints the core matrices with Node DOF column labels and respective row labels.
-        Replaces near-zero values with '0.0' to highlight matrix sparsity.
-        Dynamically extracts the null space and highlights the chosen mechanism mode.
+        Comprehensive diagnostic report of every matrix and intermediate result
+        produced by analyze_sensitivity, printed in pipeline order.
+
+        Sections
+        --------
+        [1] Constraint Matrix  C
+        [2] Dihedral Jacobian  J
+        [3] Singular value spectrum of C  (full, classified)
+        [4] Complete null space of C      (RBM + Mechanism rows)
+        [5] Mechanism null space basis  Q
+        [6] Fold angle matrix  A = J @ Q^T
+        [7] SVD of A  (Σ, U, Vt)
+        [8] Dominant nodal displacement  v*
+        [9] Final sensitivity vector + M/V validation
         """
-        # 1. Generate Column Labels (Node DOFs: N0_x, N0_y, N0_z, ...)
-        col_labels = []
+        W = 110   # report width
+
+        # ── Label setup ───────────────────────────────────────────────────────
+        col_labels   = []
         for n in self.nodes:
             col_labels.extend([f"N{n.id}_x", f"N{n.id}_y", f"N{n.id}_z"])
-
-        # 2. Generate Row Labels
-        bar_labels = [f"Bar {i}" for i in range(len(self.bars))]
+        bar_labels   = [f"Bar {i}"   for i in range(len(self.bars))]
         hinge_labels = [f"Hinge {i}" for i in range(len(self.hinges))]
-        
-        # Helper function for clean, aligned printing
-        def print_labeled_matrix(name, matrix, r_labels, c_labels):
-            print(f"\n--- {name} ---")
+
+        n_nodes  = len(self.nodes)
+        n_bars   = len(self.bars)
+        n_hinges = len(self.hinges)
+        n_dofs   = 3 * n_nodes
+        n_sv     = len(singular_values)
+        n_dof    = Vh.shape[0]
+        mech_set = set(mechanism_indices) if mechanism_indices else set()
+        k_mech   = len(mech_set)
+        null_indices = [i for i in range(n_dof)
+                        if (singular_values[i] if i < n_sv else 0.0) < 1e-9]
+
+        # ── Formatting helpers ────────────────────────────────────────────────
+        def header(title):
+            print("\n" + "═" * W)
+            print(f"  {title}")
+            print("═" * W)
+
+        def subheader(title):
+            bar = "─" * max(0, W - len(title) - 5)
+            print(f"\n  ┌─ {title} {bar}")
+
+        def print_matrix(matrix, r_labels, c_labels):
+            """Print a 2-D matrix with row and column labels."""
             if len(matrix) == 0:
-                print("Matrix is empty.")
+                print("    (empty)")
                 return
-                
-            # Dynamic spacing based on label length
-            label_width = max([len(str(lbl)) for lbl in r_labels] + [10])
-            col_width = 8
-            
-            # Print Header
-            header = f"{'':>{label_width}} | " + " | ".join([f"{col:>{col_width}}" for col in c_labels])
-            print(header)
-            print("-" * len(header))
-            
-            # Print Rows
-            for i, row in enumerate(matrix):
-                r_lbl = r_labels[i]
-                # Replace near-zeros with "0.0" for visual clarity
-                row_str = " | ".join([f"{val:>{col_width}.4f}" if abs(val) > 1e-9 else f"{'0.0':>{col_width}}" for val in row])
-                print(f"{r_lbl:>{label_width}} | {row_str}")
+            lw = max(len(str(l)) for l in r_labels) + 1
+            cw = 9
+            # header row
+            print("    " + f"{'':>{lw}} ║ " + " │ ".join(f"{c:>{cw}}" for c in c_labels))
+            print("    " + "─" * lw + "═╬═" + "═╪═".join("═" * cw for _ in c_labels))
+            for lbl, row in zip(r_labels, matrix):
+                vals = " │ ".join(
+                    f"{'  0.0   ':>{cw}}" if abs(v) < 1e-9 else f"{v:>{cw}.4f}"
+                    for v in row
+                )
+                print(f"    {lbl:>{lw}} ║ {vals}")
 
-        # --- Execute Printing ---
-        print("\n" + "="*100)
-        print("LABELED SYSTEM MATRICES".center(100))
-        print("="*100)
+        # ══════════════════════════════════════════════════════════════════════
+        header("ORIGAMI SENSITIVITY ANALYSIS — FULL DIAGNOSTIC REPORT")
+        print(f"  Problem size:  {n_nodes} nodes  │  {n_dofs} DOFs  │  "
+              f"{n_bars} bars  │  {n_hinges} hinges")
+        print(f"  Null space:    {len(null_indices)} modes (σ < 1e-9)  │  "
+              f"{k_mech} mechanism mode(s) selected")
 
-        print_labeled_matrix("CONSTRAINT MATRIX (Bars)", constraint_matrix, bar_labels, col_labels)
-        print_labeled_matrix("DIHEDRAL JACOBIAN (Hinges)", dihedral_jacobian, hinge_labels, col_labels)
+        # ── [1] Constraint Matrix C ───────────────────────────────────────────
+        header(f"[1]  CONSTRAINT MATRIX  C     shape: {n_bars} × {n_dofs}")
+        print("  One row per bar.  C[i] · v = 0  means bar i doesn't stretch under displacement v.")
+        print()
+        print_matrix(constraint_matrix, bar_labels, col_labels)
 
-        # --- DYNAMIC NULL SPACE EXTRACTION ---
-        # Find all row indices where the corresponding singular value is effectively zero
-        null_indices = [i for i, s_val in enumerate(singular_values) if s_val < 1e-5]
-        
-        if null_indices:
-            # Extract only those specific rows from Vh
-            null_space_rows = Vh[null_indices, :]
-            
-            # Label each row with its actual index, and tag the chosen one
-            vh_labels = []
-            for idx in null_indices:
-                if chosen_mode_idx is not None and idx == chosen_mode_idx:
-                    vh_labels.append(f"Mode {idx} *** CHOSEN ***")
+        # ── [2] Dihedral Jacobian J ───────────────────────────────────────────
+        header(f"[2]  DIHEDRAL JACOBIAN  J     shape: {n_hinges} × {n_dofs}")
+        print("  One row per hinge.  J[i] · v = change in dihedral angle at hinge i.")
+        print()
+        print_matrix(dihedral_jacobian, hinge_labels, col_labels)
+
+        # ── [3] Singular Value Spectrum of C ──────────────────────────────────
+        header("[3]  SINGULAR VALUE SPECTRUM  of  C     (sorted high → low)")
+        print("  Rows with σ ≈ 0 span the null space — the only legal nodal movements.")
+        print()
+        print(f"  {'Idx':>5} │ {'σ':>16} │ {'‖J·v‖₁ fold mag':>18} │  Classification")
+        print(f"  {'─'*5}─┼─{'─'*16}─┼─{'─'*18}─┼─{'─'*42}")
+        for i in range(n_dof):
+            sv     = singular_values[i] if i < n_sv else 0.0
+            v      = Vh[i, :]
+            fmag   = np.sum(np.abs(dihedral_jacobian @ v))
+            if sv >= 1e-9:
+                cls    = "Constrained (resisted by bars)"
+                fstr   = "—"
+                sv_str = f"{sv:>16.6e}"
+            else:
+                sv_str = f"{sv:>16.2e}" if sv > 0 else f"{'0  (exact)':>16}"
+                fstr   = f"{fmag:.6f}"
+                if fmag < 1e-5:
+                    cls = "NULL — Rigid Body / Spurious z-mode"
+                elif i in mech_set:
+                    cls = "★ NULL — MECHANISM (selected)"
                 else:
-                    vh_labels.append(f"Mode {idx}")
-                    
-            print_labeled_matrix(f"NULL SPACE MODES (S < 1e-5) - Found {len(null_indices)} modes", 
-                                 null_space_rows, vh_labels, col_labels)
-        else:
-            print("\n--- NULL SPACE MODES ---")
-            print("No zero-energy modes found (Null space is empty).")
+                    cls = "NULL — Mechanism (not selected)"
+            print(f"  {i:>5} │ {sv_str} │ {fstr:>18} │  {cls}")
 
-        print("\n--- SELECTED SENSITIVITY VECTOR ---")
-        if sensitivity_vector is not None:
-            # Print vertically so it's easy to read against the specific hinges
-            print(f"{'Hinge':>10} | {'Sensitivity (rad)':>18}")
-            print("-" * 31)
-            for i, val in enumerate(sensitivity_vector):
-                print(f"Hinge {i:>4} | {val:>18.6f}")
+        # ── [4] Complete Null Space of C ──────────────────────────────────────
+        header(f"[4]  COMPLETE NULL SPACE  of  C     ({len(null_indices)} vectors, σ < 1e-9)")
+        print("  Every row satisfies  C · v = 0.  Rows marked MECH are the selected mechanisms.")
+        print()
+        if null_indices:
+            null_labels = []
+            for idx in null_indices:
+                fmag = np.sum(np.abs(dihedral_jacobian @ Vh[idx, :]))
+                tag  = "MECH" if idx in mech_set else "RBM "
+                null_labels.append(f"[{tag}] Mode {idx:>2}")
+            print_matrix(Vh[null_indices, :], null_labels, col_labels)
         else:
-            print("None (No valid mechanism found).")
+            print("    No null space modes found.")
 
-        print("="*100 + "\n")
+        # ── [5] Mechanism Null Space Basis Q ──────────────────────────────────
+        if Q is not None and mechanism_indices is not None:
+            header(f"[5]  MECHANISM NULL SPACE BASIS  Q     shape: {k_mech} × {n_dofs}")
+            print("  Q = rows of Vh for mechanism modes only.")
+            print("  Each row is a unit nodal-displacement vector that folds at least one hinge.")
+            print()
+            q_row_labels = [f"Mode {idx:>2}" for idx in mechanism_indices]
+            print_matrix(Q, q_row_labels, col_labels)
+
+        # ── [6] Fold Angle Matrix A = J @ Q^T ─────────────────────────────────
+        if A is not None and mechanism_indices is not None:
+            header(f"[6]  FOLD ANGLE MATRIX  A = J · Qᵀ     shape: {n_hinges} × {k_mech}")
+            print("  A[:,r] = hinge fold angles when mechanism mode r is activated at unit amplitude.")
+            print("  Large column entries → that mode drives significant folding at those hinges.")
+            print()
+            a_col_labels = [f"Mode {idx:>2}" for idx in mechanism_indices]
+            print_matrix(A, hinge_labels, a_col_labels)
+
+        # ── [7] SVD of A ──────────────────────────────────────────────────────
+        if U_sv is not None and S_sv is not None and Vt_sv is not None:
+            k = len(S_sv)
+            header(f"[7]  SVD  of  A  →  A = U · Σ · Vᵀ     ({k} singular mode(s))")
+            print("  σ_r  = fold efficiency of mode r: max fold output per unit null-space displacement.")
+            print("  U[:,r] = fold pattern in hinge space  (what you see on the hinges).")
+            print("  Vt[r,:] = mixing weights in mechanism space  (how to combine Q rows).")
+
+            # Σ — singular values
+            selected_r = chosen_mode_idx if chosen_mode_idx is not None else 0
+            subheader("Σ  —  Singular Values  (fold efficiency, dominant first)")
+            print(f"    {'Rank':>6} │ {'σ':>14} │  Note")
+            print(f"    {'─'*6}─┼─{'─'*14}─┼─{'─'*35}")
+            for r, sv in enumerate(S_sv):
+                note = f"  ← SELECTED (best M/V alignment)" if r == selected_r else ""
+                print(f"    {r:>6} │ {sv:>14.6f} │{note}")
+
+            # U — fold patterns in hinge space
+            subheader("U  —  Left Singular Vectors  (fold patterns in hinge space)")
+            print("    Column r = fold pattern for the r-th principal mode.")
+            print(f"    best_sensitivity = U[:,{selected_r}] · σ_{selected_r}   (selected mode)\n")
+            u_col_labels = [f"σ_{r}={S_sv[r]:.3f}" for r in range(k)]
+            print_matrix(U_sv, hinge_labels, u_col_labels)
+
+            # Vt — mixing weights in mechanism space
+            subheader("Vᵀ  —  Right Singular Vectors  (mixing weights in mechanism space)")
+            print("    Row r = weights applied to Q rows to produce the r-th fold pattern.")
+            print("    v_dominant = Qᵀ · Vt[0,:]  →  the actual nodal displacement vector.\n")
+            vt_row_labels = [f"SVD mode {r}" for r in range(k)]
+            q_short_labels = ([f"Q_m{idx}" for idx in mechanism_indices]
+                              if mechanism_indices else [f"q{r}" for r in range(Vt_sv.shape[1])])
+            print_matrix(Vt_sv, vt_row_labels, q_short_labels)
+
+        # ── [8] Dominant Nodal Displacement v* ────────────────────────────────
+        if v_dominant is not None:
+            header("[8]  DOMINANT NODAL DISPLACEMENT  v*  =  Qᵀ · Vt[0,:]")
+            print("  The physical nodal displacement that produces best_sensitivity.")
+            print("  Verify:  C · v* = 0  (all bars satisfied).  J · v* = best_sensitivity.")
+            print()
+            v3 = np.array(v_dominant).reshape(-1, 3)
+            print(f"  {'Node':>6} │ {'dx':>13} │ {'dy':>13} │ {'dz':>13} │ {'‖d‖':>10}")
+            print(f"  {'─'*6}─┼─{'─'*13}─┼─{'─'*13}─┼─{'─'*13}─┼─{'─'*10}")
+            for i, (dx, dy, dz) in enumerate(v3):
+                mag  = float(np.sqrt(dx**2 + dy**2 + dz**2))
+                fmtv = lambda x: f"{'  0.0':>13}" if abs(x) < 1e-9 else f"{x:>13.6f}"
+                print(f"  {i:>6} │ {fmtv(dx)} │ {fmtv(dy)} │ {fmtv(dz)} │ {mag:>10.6f}")
+
+            # Quick verification: J @ v* should equal best_sensitivity
+            if sensitivity_vector is not None:
+                jv = dihedral_jacobian @ v_dominant
+                max_err = np.max(np.abs(jv - np.array(sensitivity_vector)))
+                print(f"\n  Verification  ‖J·v* − best_sensitivity‖∞ = {max_err:.2e}"
+                      f"  {'✓ consistent' if max_err < 1e-9 else '⚠ check sign flip'}")
+
+        # ── [9] Final Sensitivity + M/V Validation ────────────────────────────
+        _r = chosen_mode_idx if chosen_mode_idx is not None else 0
+        header(f"[9]  FINAL SENSITIVITY VECTOR  =  U[:,{_r}] · σ_{_r}  (sign-corrected, best M/V alignment)")
+        print("  These are the hinge fold sensitivities for the selected physical mechanism.")
+        print()
+        print(f"  {'Hinge':>7} │ {'Assign':>7} │ {'Target t':>10} │ {'Sensitivity':>14} │ {'M/V Check':>12}")
+        print(f"  {'─'*7}─┼─{'─'*7}─┼─{'─'*10}─┼─{'─'*14}─┼─{'─'*12}")
+        all_match = True
+        for i, h in enumerate(self.hinges):
+            asgn  = h.fold_assignment
+            t_val = t[i] if t is not None else float('nan')
+            s_val = sensitivity_vector[i] if sensitivity_vector is not None else float('nan')
+            if asgn == 'M':
+                ok = s_val >= 0
+            elif asgn == 'V':
+                ok = s_val <= 0
+            else:
+                ok = None
+            check = ("✓" if ok else "✗ MISMATCH") if ok is not None else "— (unassigned)"
+            if ok is False:
+                all_match = False
+            t_str = f"{t_val:>+10.1f}" if t is not None else f"{'N/A':>10}"
+            print(f"  {i:>7} │ {asgn:>7} │ {t_str} │ {s_val:>+14.6f} │ {check:>12}")
+
+        if sensitivity_vector is not None and t is not None:
+            ns = np.linalg.norm(sensitivity_vector)
+            nt = np.linalg.norm(t)
+            if ns > 1e-12 and nt > 1e-12:
+                cos_sim = np.dot(sensitivity_vector, t) / (ns * nt)
+                quality = ('excellent' if cos_sim > 0.99 else
+                           'good'      if cos_sim > 0.90 else
+                           'moderate'  if cos_sim > 0.50 else 'poor')
+                print(f"\n  M/V cosine alignment:  {cos_sim:.6f}  ({quality})")
+        verdict = "  ✓ All folds match M/V assignments." if all_match else \
+                  "  ⚠ WARNING: One or more folds are inconsistent with M/V assignments."
+        print(verdict)
+
+        print("\n" + "═" * W + "\n")
    
     def mountain_valley_check(self, sensitivity_vector):
         # 5. Validate: every hinge's sensitivity sign should match its .fold assignment.
@@ -426,63 +728,65 @@ class SensitivityModel:
             node_j = next(n for n in panel1.nodes if n.id == edge_key[0])
             node_k = next(n for n in panel1.nodes if n.id == edge_key[1])
 
-            # Identify "Wing" Nodes (i, l) - any node NOT on the axis
-            node_i = self.best_wing_node(panel1.nodes, edge_key, node_j, node_k)
-            node_l = self.best_wing_node(panel2.nodes, edge_key, node_j, node_k)
+            # Collect ALL non-hinge nodes for each panel (centroid-based Jacobian)
+            wing_nodes_1 = [n for n in panel1.nodes if n.id not in edge_key]
+            wing_nodes_2 = [n for n in panel2.nodes if n.id not in edge_key]
 
-
-            hinges.append(HingeElement(node_i, node_j, node_k, node_l, assignment))
+            hinges.append(HingeElement(wing_nodes_1, node_j, node_k, wing_nodes_2, assignment))
         
         return hinges
     
-    def best_wing_node(self, panel_nodes, edge_key, node_j, node_k):
-        """For quad panels, picks the wing node that forms the largest triangle
-        with the hinge edge. For triangles, only one candidate exists."""
-        candidates = [n for n in panel_nodes if n.id not in edge_key]
-        if len(candidates) == 1:
-            return candidates[0]
-        
-        e = node_k.coordinates - node_j.coordinates
-        def area_sq(wing):
-            r = wing.coordinates - node_j.coordinates
-            cross = np.cross(r, e)
-            return np.dot(cross, cross)  # proportional to triangle area²
-        
-        return max(candidates, key=area_sq)
+    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
+        """
+        Plot the origami pattern with:
+          - Bars drawn in light grey
+          - Hinges color-coded by sensitivity (blue = Mountain/+, red = Valley/-)
+          - Raw sensitivity value labeled on every hinge (always shown regardless of normalize)
+          - Optional nodal displacement vectors drawn as quiver arrows
 
-
-
-
-    def plot_pattern(self, sensitivity_vector=None, show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
-        plt.close('all') 
+        Parameters
+        ----------
+        sensitivity_vector : array-like, optional
+            One value per hinge. Drives hinge color and label.
+        nodal_vectors : array-like, optional
+            Flat 1D array of length 3*n_nodes (or shape (n_nodes, 3)).
+            Drawn as quiver arrows at each node to show the null-space
+            displacement direction.
+        vector_scale : float
+            Arrow length scale for the quiver plot.
+        vector_color : str
+            Color for the quiver arrows.
+        normalize : bool
+            If True, the colormap is normalized to [-1, +1].
+            Hinge labels always show the original (un-normalized) sensitivity.
+        """
+        plt.close('all')
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
-        # --- Process Data ---
-        plot_sens = np.zeros(len(self.hinges))
-        
+        # --- Sensitivity data ---
+        # raw_sens  → original values; always used for hinge labels
+        # plot_sens → may be scaled to [-1,+1]; drives the colormap only
+        raw_sens = np.zeros(len(self.hinges))
         if sensitivity_vector is not None:
-            # Flatten but KEEP THE SIGNS
-            plot_sens = np.array(sensitivity_vector).flatten()
-            
-        # Determine the maximum absolute value to center the colorbar
-        max_abs_val = np.max(np.abs(plot_sens))
-        if max_abs_val < 1e-12: max_abs_val = 1.0
+            raw_sens = np.array(sensitivity_vector).flatten()
 
-        # --- Normalization Strategy ---
+        max_abs_val = np.max(np.abs(raw_sens))
+        if max_abs_val < 1e-12:
+            max_abs_val = 1.0
+
         if normalize:
-            # Scale -1.0 to +1.0
-            plot_sens = plot_sens / max_abs_val
+            plot_sens = raw_sens / max_abs_val
             limit = 1.0
         else:
-            # Keep raw values
+            plot_sens = raw_sens.copy()
             limit = max_abs_val
 
-        # --- REVERSED COLOR MAP (Negative=Red, Positive=Blue) ---
-        cmap = plt.cm.coolwarm_r  # <--- The "_r" reverses the gradient
-        norm = plt.Normalize(-limit, limit)
+        # --- Color map (blue = positive/mountain, red = negative/valley) ---
+        cmap = plt.cm.coolwarm_r
+        cnorm = plt.Normalize(-limit, limit)
 
-        # --- Plot Nodes & Bars ---
+        # --- Nodes & Bars ---
         xs = [n.coordinates[0] for n in self.nodes]
         ys = [n.coordinates[1] for n in self.nodes]
         zs = [n.coordinates[2] for n in self.nodes]
@@ -490,60 +794,67 @@ class SensitivityModel:
 
         if show_node_labels:
             for n in self.nodes:
-                ax.text(n.coordinates[0], n.coordinates[1], n.coordinates[2], 
+                ax.text(n.coordinates[0], n.coordinates[1], n.coordinates[2],
                         f"{n.id}", fontsize=8, color='grey')
 
         for bar in self.bars:
             p1, p2 = bar.nodes[0].coordinates, bar.nodes[1].coordinates
-            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], 
+            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
                     color='black', alpha=0.3, linewidth=1)
 
-        # --- Plot Hinges ---
+        # --- Nodal displacement vectors (quiver) ---
+        if nodal_vectors is not None:
+            nv = np.array(nodal_vectors)
+            # Accept a flat 1D array and reshape it to (N, 3)
+            if nv.ndim == 1 and len(nv) == 3 * len(self.nodes):
+                nv = nv.reshape(-1, 3)
+            if nv.ndim == 2 and len(nv) == len(self.nodes) and nv.shape[1] == 3:
+                ax.quiver(xs, ys, zs,
+                          nv[:, 0], nv[:, 1], nv[:, 2],
+                          color=vector_color,
+                          length=vector_scale,
+                          normalize=False,
+                          arrow_length_ratio=0.15)
+            else:
+                print(f"Warning: nodal_vectors shape {nv.shape} doesn't match "
+                      f"({len(self.nodes)}, 3). Skipping quiver plot.")
+
+        # --- Hinges: color-coded lines + sensitivity labels ---
         for h_id, h in enumerate(self.hinges):
-            p_j, p_k = h.node_j.coordinates, h.node_k.coordinates
-            
-            raw_val = plot_sens[h_id]
-            
-            # 1. Get Color (Now inverted: Neg=Red, Pos=Blue)
-            color = cmap(norm(raw_val))
+            p_j = h.node_j.coordinates
+            p_k = h.node_k.coordinates
+            color = cmap(cnorm(plot_sens[h_id]))
 
-            # 2. Constant Width
-            width = 3.0
+            ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]],
+                    color=color, linestyle='-', linewidth=3.0, alpha=0.9)
 
-            # 3. Plot
-            ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]], 
-                    color=color, linestyle='-', linewidth=width, alpha=0.9)
-
-            # 4. Label
-            if show_hinge_labels and abs(raw_val) > (0.1 * limit):
+            if show_hinge_labels:
                 mid = (p_j + p_k) / 2
-                
-                label_text = f"H{h_id}"
-                if not normalize:
-                    label_text += f"\n{raw_val:.2f}"
-                
-                ax.text(mid[0], mid[1], mid[2], label_text, 
+                # Always show the raw value so the user sees the actual physics,
+                # even when the colormap has been normalized.
+                label_text = f"H{h_id}\n{raw_sens[h_id]:.3f}"
+                ax.text(mid[0], mid[1], mid[2], label_text,
                         color=color, fontsize=9, fontweight='bold',
-                        path_effects=[plt.matplotlib.patheffects.withStroke(linewidth=2, foreground="white")])
+                        path_effects=[PathEffects.withStroke(linewidth=2, foreground='white')])
 
-        # --- Formatting ---
+        # --- Axis limits ---
         all_coords = np.array([xs, ys, zs])
         max_range = np.ptp(all_coords, axis=1).max() / 2.0
-        mid_x, mid_y, mid_z = np.mean(all_coords[0]), np.mean(all_coords[1]), np.mean(all_coords[2])
+        mid_x = np.mean(all_coords[0])
+        mid_y = np.mean(all_coords[1])
+        mid_z = np.mean(all_coords[2])
         ax.set_xlim(mid_x - max_range, mid_x + max_range)
         ax.set_ylim(mid_y - max_range, mid_y + max_range)
         ax.set_zlim(mid_z - max_range, mid_z + max_range)
-        
+
         ax.set_title(title)
-        
-        # Colorbar
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+
+        # --- Colorbar ---
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, shrink=0.5)
-        
-        label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Motion (Radians)'
-        cbar.set_label(label, rotation=270, labelpad=15)
+        cbar_label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Sensitivity (rad)'
+        cbar.set_label(cbar_label, rotation=270, labelpad=15)
 
         plt.show()
 
-    

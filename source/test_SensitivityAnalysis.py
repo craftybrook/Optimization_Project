@@ -45,8 +45,8 @@ class TestElementPhysics(unittest.TestCase):
         self.nk = Node(2, 5, 0, 0)   # Hinge End
         self.nl = Node(3, 8, -1, 0)  # Wing 2 (bottom)
         
-        # NOTE: Updated to include 'M' assignment
-        self.hinge = HingeElement(self.ni, self.nj, self.nk, self.nl, "M")
+        # NOTE: wing nodes passed as lists (centroid-based Jacobian interface)
+        self.hinge = HingeElement([self.ni], self.nj, self.nk, [self.nl], "M")
 
     # --- BAR TESTS ---
     def test_bar_direction_cosines(self):
