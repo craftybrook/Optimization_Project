@@ -93,14 +93,14 @@ class SensitivityModel:
         A = dihedral_jacobian @ Q.T
 
         # 5. Build target vector from fold assignments
-        t = np.zeros(len(self.hinges))
+        target_fold_vector = np.zeros(len(self.hinges))
         for i, h in enumerate(self.hinges):
             if h.fold_assignment == 'M':
-                t[i] = +1.0
+                target_fold_vector[i] = +1.0
             elif h.fold_assignment == 'V':
-                t[i] = -1.0
+                target_fold_vector[i] = -1.0
         print("\nTarget fold vector (t):")
-        for i, val in enumerate(t):
+        for i, val in enumerate(target_fold_vector):
             assignment = self.hinges[i].fold_assignment
             print(f"  Hinge {i:>4} ({assignment}): t = {val:+.1f}")
 
@@ -121,14 +121,14 @@ class SensitivityModel:
         # Skip modes whose fold efficiency is negligible relative to the dominant
         # mode (relative threshold avoids selecting near-zero spurious modes that
         # happen to spuriously align with t but carry no physical fold content).
-        if np.linalg.norm(t) > 1e-12:
+        if np.linalg.norm(target_fold_vector) > 1e-12:
             best_r        = 0
             best_cos      = -1.0
             rel_threshold = 1e-3 * S_sv[0]   # ignore modes < 0.1 % of dominant σ
             for r in range(len(S_sv)):
                 if S_sv[r] < rel_threshold:  # skip negligible / degenerate modes
                     continue
-                cos = np.dot(U_sv[:, r], t) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(t))
+                cos = np.dot(U_sv[:, r], target_fold_vector) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(target_fold_vector))
                 if abs(cos) > best_cos:      # abs because sign is resolved below
                     best_cos = abs(cos)
                     best_r   = r
@@ -142,7 +142,7 @@ class SensitivityModel:
         v_dominant = Q.T @ Vt_sv[best_r, :]
 
         # Fix sign (SVD eigenvectors have arbitrary sign; M/V target resolves it).
-        if np.linalg.norm(t) > 1e-12 and np.dot(best_sensitivity, t) < 0:
+        if np.linalg.norm(target_fold_vector) > 1e-12 and np.dot(best_sensitivity, target_fold_vector) < 0:
             best_sensitivity = -best_sensitivity
             v_dominant       = -v_dominant
 
@@ -154,9 +154,9 @@ class SensitivityModel:
 
         # Report alignment quality
         norm_s = np.linalg.norm(best_sensitivity)
-        norm_t = np.linalg.norm(t)
+        norm_t = np.linalg.norm(target_fold_vector)
         if norm_s > 1e-12 and norm_t > 1e-12:
-            cos_sim = np.dot(best_sensitivity, t) / (norm_s * norm_t)
+            cos_sim = np.dot(best_sensitivity, target_fold_vector) / (norm_s * norm_t)
             quality = 'excellent' if cos_sim > 0.99 else \
                       'good'      if cos_sim > 0.90 else \
                       'moderate'  if cos_sim > 0.50 else 'poor'
@@ -171,7 +171,7 @@ class SensitivityModel:
                                    Q=Q, A=A,
                                    U_sv=U_sv, S_sv=S_sv, Vt_sv=Vt_sv,
                                    v_dominant=v_dominant,
-                                   t=t,
+                                   t=target_fold_vector,
                                    chosen_mode_idx=best_r)
         
         self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
