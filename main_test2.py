@@ -42,8 +42,8 @@ if __name__ == "__main__":
     # Make sure this file is in the same folder, or provide the full path
     filename = "BirdsFoot3.fold" 
 
-    # set_up_bloom(m=5,h=1,s=1) # Generates bloom_yoshimura.fold in the current directory
-    # filename = "bloom_yoshimura.fold"
+    set_up_bloom(m=5,h=1,s=1) # Generates bloom_yoshimura.fold in the current directory
+    filename = "bloom_yoshimura.fold"
 
     # filename = "flasher.fold"
 
