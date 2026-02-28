@@ -33,62 +33,39 @@ class SensitivityModel:
         self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
         
-        
     def analyze_sensitivity(self):
         """
         Identifies the physical folding mechanism via SVD of the mechanism
-        subspace matrix A = J @ Q^T.
-
-        Algorithm
-        ---------
-        1. Build the constraint matrix C (bars) and dihedral Jacobian J (hinges).
-        2. SVD of C → collect every null space mode (σ ≈ 0).
-        3. Classify each null space mode as Rigid Body (J@v ≈ 0) or Mechanism.
-        4. Stack the mechanism modes into basis Q; compute A = J @ Q^T.
-           A[:,r] = fold-angle change vector for null space mode r.
-        5. Build target vector  t:  M → +1,  V → -1,  U → 0.
-        6. SVD of A:  U, S, _ = svd(A).
-           U[:,0] * S[0] is the dominant physical fold mode — the linear
-           combination of null-space displacements that maximises total fold
-           output per unit displacement energy.  This preserves the true
-           geometric fold ratios regardless of how many spurious z-modes exist.
-           M/V assignments are used only to fix the sign of the result.
-        7. Return  best_sensitivity = U[:,0] * S[0]  (sign-corrected).
+        subspace matrix A = J @ Q^T. Automatically corrects arbitrarily 
+        scrambled hinge coordinate systems by referencing the .fold M/V assignments.
         """
         # 1. Build Matrices
         dihedral_jacobian = self.build_dihedral_jacobian()
         constraint_matrix = self.build_constraint_matrix()
 
-
-
-        # 2. Solve SVD
+        # 2. Solve SVD on Constraint Matrix
         _, singular_values, Vh = np.linalg.svd(constraint_matrix)
         n_dof = Vh.shape[0]
 
         # 3. Enumerate all null space modes, classify as RBM vs Mechanism
-        mechanism_indices = []   # Vh row indices that actually fold hinges
+        mechanism_indices = []   
 
         for i in range(n_dof):
-            s_val = singular_values[i] if i < len(singular_values) else 0.0 #TODO I think this is not good??
+            s_val = singular_values[i] if i < len(singular_values) else 0.0 
             if s_val < 1e-9:
                 v             = Vh[i, :]
                 fold_changes  = dihedral_jacobian @ v
                 total_folding = np.sum(np.abs(fold_changes))
 
-                if total_folding < 1e-5:
-                    mode_type = "Rigid Body (Motion without Folding)"
-                else:
-                    mode_type = "*** MECHANISM *** (Valid Folding)"
+                # If the nodes move but the hinges don't fold, it's a rigid body/junk mode
+                if total_folding >= 1e-5:
                     mechanism_indices.append(i)
-
 
         if not mechanism_indices:
             print("WARNING: No mechanism detected in the Null Space.")
             return np.zeros(len(self.hinges))
 
-        # 4. Build mechanism subspace matrix
-        #    Q[r, :]  = r-th mechanism null space basis vector   (k × n_dof)
-        #    A[:, r]  = fold-angle changes for that mode         (n_hinges × k)
+        # 4. Build mechanism subspace matrix Q and Fold matrix A
         Q = Vh[mechanism_indices, :]
         A = dihedral_jacobian @ Q.T
 
@@ -99,52 +76,97 @@ class SensitivityModel:
                 target_fold_vector[i] = +1.0
             elif h.fold_assignment == 'V':
                 target_fold_vector[i] = -1.0
+                
         print("\nTarget fold vector (t):")
         for i, val in enumerate(target_fold_vector):
             assignment = self.hinges[i].fold_assignment
             print(f"  Hinge {i:>4} ({assignment}): t = {val:+.1f}")
 
-        # Unassigned hinges stay 0 — they don't influence the selection
-
-        # 6. SVD of A → find the physical mechanism most aligned with M/V assignments.
-        #    A = J @ Q^T  maps null-space displacements to fold-angle changes.
-        #    U[:,r] gives the r-th principal fold pattern (in hinge space).
-        #    S[r]   is the fold magnitude per unit null-space displacement.
-        #
-        #    Selection criterion: pick the mode r whose unit fold pattern U[:,r]
-        #    has the highest cosine similarity with the M/V target t.
-        #    Modes with S[r] ≈ 0 are skipped (negligible fold output).
-        #    If no M/V data exists, fall back to the dominant mode (r=0).
+        # 6. INITIAL SVD of A
         U_sv, S_sv, Vt_sv = np.linalg.svd(A, full_matrices=False)
 
-        # Choose the mode whose direction best matches the M/V target.
-        # Skip modes whose fold efficiency is negligible relative to the dominant
-        # mode (relative threshold avoids selecting near-zero spurious modes that
-        # happen to spuriously align with t but carry no physical fold content).
+        # Select the mode closest to our M/V target (using absolute cosine similarity)
         if np.linalg.norm(target_fold_vector) > 1e-12:
             best_r        = 0
             best_cos      = -1.0
-            rel_threshold = 1e-3 * S_sv[0]   # ignore modes < 0.1 % of dominant σ
+            rel_threshold = 1e-3 * S_sv[0]   
             for r in range(len(S_sv)):
-                if S_sv[r] < rel_threshold:  # skip negligible / degenerate modes
+                if S_sv[r] < rel_threshold:  
                     continue
                 cos = np.dot(U_sv[:, r], target_fold_vector) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(target_fold_vector))
-                if abs(cos) > best_cos:      # abs because sign is resolved below
+                if abs(cos) > best_cos:      
                     best_cos = abs(cos)
                     best_r   = r
         else:
-            best_r = 0                       # no M/V info — default to dominant mode
+            best_r = 0                       
 
-        # best_sensitivity: fold pattern of the selected mode, scaled by fold efficiency.
         best_sensitivity = U_sv[:, best_r] * S_sv[best_r]
-
-        # v_dominant: the actual nodal displacement that produces best_sensitivity.
         v_dominant = Q.T @ Vt_sv[best_r, :]
 
-        # Fix sign (SVD eigenvectors have arbitrary sign; M/V target resolves it).
+        # Fix the global sign for the initial pass
         if np.linalg.norm(target_fold_vector) > 1e-12 and np.dot(best_sensitivity, target_fold_vector) < 0:
             best_sensitivity = -best_sensitivity
             v_dominant       = -v_dominant
+
+        # =====================================================================
+        # THE FIX: HINGE AUTO-CALIBRATION (SWAP AND RERUN)
+        # =====================================================================
+        print("\nChecking for scrambled hinge orientations based on M/V assignments...")
+        mismatches_found = False
+        
+        for i, h in enumerate(self.hinges):
+            s_val = best_sensitivity[i]
+            
+            # If math says negative, but the .fold assignment is Mountain (+)
+            if h.fold_assignment == 'M' and s_val < -1e-5:
+                h.wing_nodes_1, h.wing_nodes_2 = h.wing_nodes_2, h.wing_nodes_1
+                h.node_i, h.node_l = h.node_l, h.node_i
+                mismatches_found = True
+                
+            # If math says positive, but the .fold assignment is Valley (-)
+            elif h.fold_assignment == 'V' and s_val > 1e-5:
+                h.wing_nodes_1, h.wing_nodes_2 = h.wing_nodes_2, h.wing_nodes_1
+                h.node_i, h.node_l = h.node_l, h.node_i
+                mismatches_found = True
+
+        if mismatches_found:
+            print("Mismatches found! Swapping internal panel definitions and rerunning Dihedral Jacobian...")
+            
+            # Rebuild only the Jacobian and A matrix (Constraint matrix C hasn't changed!)
+            dihedral_jacobian = self.build_dihedral_jacobian()
+            A = dihedral_jacobian @ Q.T
+            
+            # Rerun SVD on the newly aligned A matrix
+            U_sv, S_sv, Vt_sv = np.linalg.svd(A, full_matrices=False)
+            
+            # Re-evaluate best mode alignment
+            if np.linalg.norm(target_fold_vector) > 1e-12:
+                best_r = 0
+                best_cos = -1.0
+                rel_threshold = 1e-3 * S_sv[0]
+                for r in range(len(S_sv)):
+                    if S_sv[r] < rel_threshold:
+                        continue
+                    cos = np.dot(U_sv[:, r], target_fold_vector) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(target_fold_vector))
+                    if abs(cos) > best_cos:
+                        best_cos = abs(cos)
+                        best_r = r
+            else:
+                best_r = 0
+
+            # Grab the newly corrected vectors
+            best_sensitivity = U_sv[:, best_r] * S_sv[best_r]
+            v_dominant = Q.T @ Vt_sv[best_r, :]
+            
+            # Fix global sign one last time
+            if np.linalg.norm(target_fold_vector) > 1e-12 and np.dot(best_sensitivity, target_fold_vector) < 0:
+                best_sensitivity = -best_sensitivity
+                v_dominant = -v_dominant
+                
+            print("Rerun complete. Hinges are now permanently aligned to the .fold file.")
+        else:
+            print("No scrambled orientations found. Initial pass is perfectly aligned.")
+        # =====================================================================
 
         # Report singular value spectrum, marking the selected mode
         print(f"\nMechanism subspace singular values (fold efficiency per unit displacement):")
@@ -178,7 +200,7 @@ class SensitivityModel:
                                  title="Dominant Folding Mechanism (Sensitivity Vector)",
                                  normalize=True)
 
-        return best_sensitivity
+        return best_sensitivity    
     
     def dead_analyze_sensitivity(self): # old function, may revery back to it. 
         # 1. Build Matrices
@@ -672,8 +694,8 @@ class SensitivityModel:
         return bars
 
     def generate_hinges(self):
-        """ Detects shared edges and creates a hinge element. """
-        # TODO: make it so that it only puts a hinge where we tell it there is a hinge, not at every shared edge
+        """ Creates a hinge where the .fold file says there should be a hinge. If there is no .fold file,
+          it creates a hinge between every edge that has 2 panels on it."""
 
         hinges = []
 
@@ -857,4 +879,3 @@ class SensitivityModel:
         cbar.set_label(cbar_label, rotation=270, labelpad=15)
 
         plt.show()
-

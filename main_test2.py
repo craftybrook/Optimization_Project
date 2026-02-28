@@ -37,14 +37,15 @@ def set_up_bloom(m=5,h=1,s=1, Show_Origin=1, Show_Points=1, Show_facets=0, Show_
     bloom.graph()
     bloom.export_to_fold()
 
-# TODO fix the center panel of the bloom patterns
 if __name__ == "__main__":
     # 1. Define the path to your .fold file
     # Make sure this file is in the same folder, or provide the full path
-    # filename = "BirdsFoot.fold" 
+    filename = "BirdsFoot3.fold" 
 
-    set_up_bloom(m=7,h=1,s=1.5) # Generates bloom_yoshimura.fold in the current directory
-    filename = "bloom_yoshimura.fold"
+    # set_up_bloom(m=5,h=1,s=1) # Generates bloom_yoshimura.fold in the current directory
+    # filename = "bloom_yoshimura.fold"
+
+    # filename = "flasher.fold"
 
     try:
         print(f"Loading {filename}...")
