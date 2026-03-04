@@ -94,13 +94,14 @@ class SensitivityModel:
                 if S_sv[r] < rel_threshold:  
                     continue
                 cos = np.dot(U_sv[:, r], target_fold_vector) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(target_fold_vector))
+                # remember the vectors in U_sv are normalized, so we can just use the cosine similarity directly to find the best alignment with our target fold vector.
                 if abs(cos) > best_cos:      
                     best_cos = abs(cos)
                     best_r   = r
         else:
             best_r = 0                       
 
-        best_sensitivity = U_sv[:, best_r] * S_sv[best_r]
+        best_sensitivity = U_sv[:, best_r] * S_sv[best_r] # we scale the eigenvector by its singular value to get the actual sensitivity magnitudes
         v_dominant = Q.T @ Vt_sv[best_r, :]
 
         # Fix the global sign for the initial pass
@@ -196,11 +197,10 @@ class SensitivityModel:
                                    t=target_fold_vector,
                                    chosen_mode_idx=best_r)
         
-        self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
-                                 title="Dominant Folding Mechanism (Sensitivity Vector)",
-                                 normalize=True)
-
-        return best_sensitivity    
+        
+        self.best_sensitivity = best_sensitivity
+        self.v_dominant = v_dominant
+        return best_sensitivity
     
     def dead_analyze_sensitivity(self): # old function, may revery back to it. 
         # 1. Build Matrices

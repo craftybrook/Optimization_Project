@@ -1,7 +1,10 @@
+import matplotlib.pyplot as plt
+
 from source.SensitivityAnalysis import SensitivityModel
 from source.Bloom_Yoshimura import Bloom_Yoshimura
+from source.visualization import plot_sensitivity_violin
 
-def set_up_bloom(m=5,h=1,s=1, Show_Origin=1, Show_Points=1, Show_facets=0, Show_Lines=1, Line_Width=1, Line_Style=1, Invert_Creases=0):
+def set_up_bloom(m=5,h=1,s=1,file_name=None, show_plot = None,Show_Origin=1, Show_Points=1, Show_facets=0, Show_Lines=1, Line_Width=1, Line_Style=1, Invert_Creases=0):
     ''' ENTER YOUR PREFERENCES HERE: '''
     # m = ["     7     "] # example values: 5, 6, 8, 12 #
     # h = ["     1     "] # example values: 1, 2, 3 #
@@ -35,17 +38,45 @@ def set_up_bloom(m=5,h=1,s=1, Show_Origin=1, Show_Points=1, Show_facets=0, Show_
     bloom.crease_is_invert = Invert_Creases
     
     bloom.graph()
-    bloom.export_to_fold()
+    if show_plot is not None:
+        plt.close('all')
+
+    bloom.export_to_fold(filename=file_name)
 
 if __name__ == "__main__":
     # 1. Define the path to your .fold file
     # Make sure this file is in the same folder, or provide the full path
-    filename = "BirdsFoot3.fold" 
+    # filename = "BirdsFoot3.fold" 
+    # model = SensitivityModel(filename)
+    # model.plot_pattern_vector(model.best_sensitivity, nodal_vectors=model.v_dominant,
+    #                              title="Dominant Folding Mechanism (Sensitivity Vector)",
+    #                              normalize=True)
 
-    set_up_bloom(m=5,h=1,s=1) # Generates bloom_yoshimura.fold in the current directory
+
     filename = "bloom_yoshimura.fold"
+    set_up_bloom(m=5,h=2,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
+    
+    filename1 = "bloom_yoshimura1.fold"
+    set_up_bloom(m=5,h=1,s=1,file_name=filename1) # Generates bloom_yoshimura1.fold in the current directory
 
-    # filename = "flasher.fold"
+    bloom = SensitivityModel(filename)
+    bloom.analyze_sensitivity()
+    plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
+
+    bloom1 = SensitivityModel(filename1)
+    bloom1.analyze_sensitivity()
+    plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
+
+    sensitivities = {
+        "bloom_yoshimura" : bloom.best_sensitivity,
+        "bloom_yoshimura1" : bloom1.best_sensitivity,
+    }
+
+    fig, ax = plot_sensitivity_violin(sensitivities)
+    fig.savefig("sensitivity_violin.pdf", bbox_inches="tight")
+    plt.show()  # display the violin plot
+
+
 
     try:
         print(f"Loading {filename}...")
