@@ -33,7 +33,7 @@ class SensitivityModel:
         self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
         
-    def analyze_sensitivity(self):
+    def analyze_sensitivity(self, show_plot=None):
         """
         Identifies the physical folding mechanism via SVD of the mechanism
         subspace matrix A = J @ Q^T. Automatically corrects arbitrarily 
@@ -175,16 +175,7 @@ class SensitivityModel:
             marker = f"  ← selected (best M/V alignment, rank {r})" if r == best_r else ""
             print(f"  σ_{r} = {sv:.6f}{marker}")
 
-        # Report alignment quality
-        norm_s = np.linalg.norm(best_sensitivity)
-        norm_t = np.linalg.norm(target_fold_vector)
-        if norm_s > 1e-12 and norm_t > 1e-12:
-            cos_sim = np.dot(best_sensitivity, target_fold_vector) / (norm_s * norm_t)
-            quality = 'excellent' if cos_sim > 0.99 else \
-                      'good'      if cos_sim > 0.90 else \
-                      'moderate'  if cos_sim > 0.50 else 'poor'
-            print(f"M/V alignment score (cosine similarity with target): "
-                  f"{cos_sim:.6f}  ({quality})")
+        self.report_alignment(best_sensitivity, target_fold_vector)
 
         # 7. Validate and report
         self.mountain_valley_check(best_sensitivity)
@@ -197,82 +188,29 @@ class SensitivityModel:
                                    t=target_fold_vector,
                                    chosen_mode_idx=best_r)
         
+        if show_plot is not None:
+            self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
+                                    title="Dominant Folding Mechanism (Sensitivity Vector)",
+                                    normalize=True)
+
         
         self.best_sensitivity = best_sensitivity
         self.v_dominant = v_dominant
         return best_sensitivity
     
-    def dead_analyze_sensitivity(self): # old function, may revery back to it. 
-        # 1. Build Matrices
-        dihedral_jacobian = self.build_dihedral_jacobian()
-        constraint_matrix = self.build_constraint_matrix()
-
-        # 2. Solve SVD
-        _, singular_values, Vh = np.linalg.svd(constraint_matrix)
-
-        # 3. Analyze the Null Space (S ≈ 0)
-        print("\n--- NULL SPACE ANALYSIS (S ≈ 0) ---")
-        print(f"{'Mode Idx':<10} | {'Singular Value (S)':<20} | {'Folding Magnitude':<20} | {'Type'}")
-        print("-" * 75)
-
-        best_sensitivity = None
-        max_folding = -1.0
-        best_mode_idx = None
-        n_sv = len(singular_values)
-        n_dof = Vh.shape[0]
-
-        
-        # We check every single mode to find the zeros
-        # singular_values is sorted High -> Low, so the zeros are at the end.
-        for i in range(n_dof):
-            s_val = singular_values[i] if i < n_sv else 0.0 
-            
-            # THRESHOLD: Only look at modes that are effectively zero energy
-            if s_val < 1e-9:
-                current_nullspace_vector = Vh[i, :]
-                
-                # Calculate how much this mode folds the hinges
-                current_crease_changes = dihedral_jacobian @ current_nullspace_vector
-                current_total_folding = np.sum(np.abs(current_crease_changes))
-                
-                # Classify the mode
-                if current_total_folding < 1e-5:
-                    mode_type = "Rigid Body (Motion without Folding)"
-                else:
-                    mode_type = "*** MECHANISM *** (Valid Folding)"
-                    
-                    # Track the best mechanism
-                    if current_total_folding > max_folding:
-                        max_folding = current_total_folding
-                        best_sensitivity = current_crease_changes
-                        best_mode_idx = i
-
-                print(f"{i:<10} | {s_val:.4e}           | {current_total_folding:.6f}             | {mode_type}")
-
-        print("-" * 75)
-
-        if best_sensitivity is None:
-             print("WARNING: No mechanism detected in the Null Space.")
-             return np.zeros(len(self.hinges))
-
-        # 4. Pin sign convention using fold assignments from the .fold file.
-        #    SVD eigenvectors are defined up to a global sign flip (+v or -v).
-        #    We resolve this ambiguity by requiring mountain folds (M) to be
-        #    positive — i.e. they activate in the mountain direction.
-        mountain_indices = [i for i, h in enumerate(self.hinges) if h.fold_assignment == 'M']
-        if len(mountain_indices) > 0:
-            if np.sum(best_sensitivity[np.array(mountain_indices)]) < 0:
-                print("FLIPPING SENSITIVITY VECTOR TO MATCH MOUNTAIN FOLD CONVENTION...(we want mountains to be positive)")
-                best_sensitivity = -best_sensitivity
-
-        self.mountain_valley_check(best_sensitivity)
-
-        # --- This prints all the innards ---
-        self.print_system_matrices(dihedral_jacobian, constraint_matrix, singular_values, Vh, best_sensitivity, chosen_mode_idx=best_mode_idx)
-        
-        
-        return best_sensitivity
-
+    def report_alignment(self, best_sensitivity, target_fold_vector):
+        """Compares the computed sensitivity vector to the target fold vector derived from M/V assignments, and reports the quality of alignment."""
+        # Report alignment quality
+        norm_s = np.linalg.norm(best_sensitivity)
+        norm_t = np.linalg.norm(target_fold_vector)
+        if norm_s > 1e-12 and norm_t > 1e-12:
+            cos_sim = np.dot(best_sensitivity, target_fold_vector) / (norm_s * norm_t)
+            quality = 'excellent' if cos_sim > 0.99 else \
+                      'good'      if cos_sim > 0.90 else \
+                      'moderate'  if cos_sim > 0.50 else 'poor'
+            print(f"M/V alignment score (cosine similarity with target): "
+                  f"{cos_sim:.6f}  ({quality})")
+    
     def print_system_matrices(self, dihedral_jacobian, constraint_matrix, singular_values, Vh,
                               sensitivity_vector, mechanism_indices=None,
                               Q=None, A=None, U_sv=None, S_sv=None, Vt_sv=None,

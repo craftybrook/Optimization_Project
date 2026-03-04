@@ -51,48 +51,35 @@ if __name__ == "__main__":
     # model.plot_pattern_vector(model.best_sensitivity, nodal_vectors=model.v_dominant,
     #                              title="Dominant Folding Mechanism (Sensitivity Vector)",
     #                              normalize=True)
-
-
-    filename = "bloom_yoshimura.fold"
-    set_up_bloom(m=5,h=2,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
-    
-    filename1 = "bloom_yoshimura1.fold"
-    set_up_bloom(m=5,h=1,s=1,file_name=filename1) # Generates bloom_yoshimura1.fold in the current directory
-
-    bloom = SensitivityModel(filename)
-    bloom.analyze_sensitivity()
-    plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
-
-    bloom1 = SensitivityModel(filename1)
-    bloom1.analyze_sensitivity()
-    plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
-
-    sensitivities = {
-        "bloom_yoshimura" : bloom.best_sensitivity,
-        "bloom_yoshimura1" : bloom1.best_sensitivity,
-    }
-
-    fig, ax = plot_sensitivity_violin(sensitivities)
-    fig.savefig("sensitivity_violin.pdf", bbox_inches="tight")
-    plt.show()  # display the violin plot
-
-
-
     try:
-        print(f"Loading {filename}...")
+
+        filename = "model_t_flasher.fold"
+        model_t_flasher = SensitivityModel(filename)
+        model_t_flasher.analyze_sensitivity(show_plot=1)
         
-        # 2. Initialize the Model
 
-        model = SensitivityModel(filename)
-        print(f"Model Loaded: {len(model.nodes)} Nodes, {len(model.hinges)} Hinges detected.")
+        # filename = "bloom_yoshimura.fold"
+        # set_up_bloom(m=5,h=1,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
+        
+        # filename1 = "bloom_yoshimura1.fold"
+        # set_up_bloom(m=5,h=1,s=1,file_name=filename1) # Generates bloom_yoshimura1.fold in the current directory
 
-        # 3. Run Analysis
-        print("Solving SVD...")
-        sensitivity = model.analyze_sensitivity()
+        # bloom = SensitivityModel(filename)
+        # bloom.analyze_sensitivity()
+        # plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
 
-        # 4. Visualize
-        print("Plotting results...")
-        # model.plot_pattern(sensitivity, title=f"Sensitivity Analysis: {filename}")
+        # bloom1 = SensitivityModel(filename1)
+        # bloom1.analyze_sensitivity()
+        # plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
+
+        # sensitivities = {
+        #     "bloom_yoshimura" : bloom.best_sensitivity,
+        #     "flasher" : model_t_flasher.best_sensitivity,
+        # }
+
+        # fig, ax = plot_sensitivity_violin(sensitivities)
+        # fig.savefig("sensitivity_violin.pdf", bbox_inches="tight")
+        # plt.show()  # display the violin plot
         
 
     except FileNotFoundError:
