@@ -13,7 +13,7 @@ def plot_sensitivity_violin(
     show_points: bool = True,
     figsize: tuple = (9, 5),
     color: str = "#4C72B0",
-    title: str = "Hinge Sensitivity Distribution by Bloom Pattern",
+    title: str = "Hinge Sensitivity Distribution",
 ) -> tuple[plt.Figure, plt.Axes]:
     """
     Violin plot comparing the distribution of hinge sensitivity values
@@ -22,8 +22,7 @@ def plot_sensitivity_violin(
     Parameters
     ----------
     pattern_sensitivities : dict
-        Maps pattern name -> sensitivity vector s (one entry per hinge,
-        units: rad / model-length-unit).
+        Maps pattern name -> sensitivity vector s (one entry per hinge).
     use_absolute : bool
         If True, plot |s_i| so that M/V sign convention does not split the
         distribution. If False, plot signed values.
@@ -98,12 +97,12 @@ def plot_sensitivity_violin(
 
     # --- Axes formatting ---
     ylabel = (
-        r"Hinge Sensitivity $|s_i|$  (rad / length)"
+        r"Normalized Sensitivity $|s_i|$"
         if use_absolute
-        else r"Hinge Sensitivity $s_i$  (rad / length)"
+        else r"Normalized Sensitivity $s_i$"
     )
     ax.set_ylabel(ylabel, fontsize=11)
-    ax.set_xlabel("Bloom Pattern", fontsize=11)
+    ax.set_xlabel("Pattern", fontsize=11)
     ax.set_title(title, fontsize=13, pad=10)
     ax.set_xticks(positions)
     ax.set_xticklabels(names, fontsize=11)
@@ -125,3 +124,32 @@ def _darken(hex_color: str, factor: float = 0.7) -> str:
     return "#{:02x}{:02x}{:02x}".format(
         int(r * factor), int(g * factor), int(b * factor)
     )
+
+
+from typing import Union, Dict
+
+def calculate_stats(data: Union[np.ndarray, list], use_sample: bool = True) -> Dict[str, float]:
+    """Calculates mean, median, standard deviation, and CV."""
+    arr = np.asarray(data, dtype=float)
+    if arr.size == 0:
+        raise ValueError("Cannot calculate statistics on an empty array.")
+        
+    ddof = 1 if use_sample else 0
+    mean_val = np.mean(arr)
+    median_val = np.median(arr)
+    std_dev = np.std(arr, ddof=ddof)
+    
+    cv = np.nan if mean_val == 0 else std_dev / mean_val
+        
+    return {
+        "mean": mean_val,
+        "median": median_val,
+        "std_dev": std_dev,
+        "cv": cv
+    }
+
+# --- Example Usage ---
+# test_data = [10.5, 12.1, 9.8, 11.2, 11.5, 10.9]
+# results = calculate_stats(test_data)
+# print(f"Mean: {results['mean']:.3f}")
+# print(f"CV: {results['cv']:.3f}")

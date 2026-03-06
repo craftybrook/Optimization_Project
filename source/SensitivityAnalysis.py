@@ -65,7 +65,13 @@ class SensitivityModel:
         if recal_results is not None:
             best_sensitivity, v_dominant, U_sv, S_sv, Vt_sv, best_r, dihedral_jacobian, A = recal_results
 
-        # 8. Report & Validate
+        # 8. Non-dimensionalize sensitivity by characteristic length to get units of radians per model-length-unit
+        characteristic_length = self.get_characteristic_length()
+        best_sensitivity = best_sensitivity #* characteristic_length
+        
+        print(f"\nNon-dimensionalized sensitivity using characteristic length: {characteristic_length:.4f} units")
+
+        # 9. Report & Validate
         self.report_singular_values(S_sv, best_r)
         self.report_alignment(best_sensitivity, target_fold_vector)
         self.mountain_valley_check(best_sensitivity)
@@ -76,7 +82,7 @@ class SensitivityModel:
             v_dominant=v_dominant, t=target_fold_vector, chosen_mode_idx=best_r
         )
         
-        if show_plot is not None:
+        if show_plot is 'yes':
             self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
                                     title="Dominant Folding Mechanism (Sensitivity Vector)",
                                     normalize=True)
@@ -84,6 +90,246 @@ class SensitivityModel:
         self.best_sensitivity = best_sensitivity
         self.v_dominant = v_dominant
         return best_sensitivity
+    
+    def check_integration_rigidity(self, num_steps=50, step_size=0.02):
+        """
+        Integrates the folding path and tracks the change in hinge lengths
+        (stretching error) for every individual hinge at each iteration,
+        then plots the accumulated error to verify rigid kinematics.
+        """
+        print(f"\n--- Verifying Rigid Kinematics ({num_steps} steps) ---")
+        target_fold_vector = self.build_target_fold_vector()
+        
+        # 1. Store initial coordinates and exact initial hinge lengths
+        original_coords = [n.coordinates.copy() for n in self.nodes]
+        
+        initial_hinge_lengths = []
+        for h in self.hinges:
+            vec = h.node_k.coordinates - h.node_j.coordinates
+            initial_hinge_lengths.append(np.linalg.norm(vec))
+            
+        # Initialize error tracking dictionary
+        hinge_errors = {i: [] for i in range(len(self.hinges))}
+        steps_taken = []
+            
+        # 2. Integration Loop
+        for step in range(num_steps):
+            v_dom = self.get_instantaneous_mechanism(target_fold_vector)
+            
+            if v_dom is None:
+                print(f"Kinematic lock-up reached at step {step}.")
+                break
+                
+            steps_taken.append(step + 1)
+            v_reshaped = v_dom.reshape(-1, 3)
+            
+            # Step the physical nodes forward
+            for i, node in enumerate(self.nodes):
+                node.coordinates = node.coordinates + (v_reshaped[i] * step_size)
+                
+            # --- Track Hinge Stretching for EVERY Hinge ---
+            for i, h in enumerate(self.hinges):
+                vec = h.node_k.coordinates - h.node_j.coordinates
+                current_length = np.linalg.norm(vec)
+                error = abs(current_length - initial_hinge_lengths[i])
+                hinge_errors[i].append(error)
+
+        # 3. Reset model back to pristine flat state
+        for i, node in enumerate(self.nodes):
+            node.coordinates = original_coords[i]
+            
+        print("Rigidity check complete. Generating error plot...")
+
+        # 4. Plot the tracked errors
+        plt.figure(figsize=(10, 6))
+        for i in range(len(self.hinges)):
+            assignment = self.hinges[i].fold_assignment
+            plt.plot(steps_taken, hinge_errors[i], label=f'Hinge {i} ({assignment})', marker='.', linewidth=1.5)
+
+        plt.title(f"Euler Integration Drift: Hinge Line Stretching (Step Size: {step_size})")
+        plt.xlabel("Integration Step")
+        plt.ylabel("Absolute Length Error (units)")
+        
+        # Using a scientific notation formatter for the Y-axis since the errors are usually tiny
+        plt.ticklabel_format(axis='y', style='sci', scilimits=(0,0)) 
+        
+        plt.grid(True, which="both", linestyle="--", alpha=0.6)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.show()
+        
+    def animate_nonlinear_folding(self, num_steps=1000, step_size=0.01, interval=50):
+        """
+        Integrates the folding path by re-evaluating the SVD at every frame.
+        Nodes follow true nonlinear arcs. No panel stretching occurs.
+        """
+        print(f"\nIntegrating folding path ({num_steps} steps)...")
+        
+        target_fold_vector = self.build_target_fold_vector()
+        
+        # Store original coordinates so we don't permanently ruin the model
+        original_coords = [n.coordinates.copy() for n in self.nodes]
+        
+        trajectory = []
+        trajectory.append(np.array(original_coords))
+
+        # --- Integration Loop ---
+        for step in range(num_steps):
+            v_dom = self.get_instantaneous_mechanism(target_fold_vector)
+            
+            if v_dom is None:
+                print(f"Kinematic lock-up reached at step {step}. Stopping integration.")
+                break
+                
+            v_reshaped = v_dom.reshape(-1, 3)
+            
+            # Update the physical nodes
+            for i, node in enumerate(self.nodes):
+                node.coordinates = node.coordinates + (v_reshaped[i] * step_size)
+                
+            # Save the new state
+            trajectory.append(np.array([n.coordinates.copy() for n in self.nodes]))
+
+        # Reset model to original state
+        for i, node in enumerate(self.nodes):
+            node.coordinates = original_coords[i]
+
+        print("Integration complete. Rendering animation...")
+
+        # --- Setup Animation ---
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_title("Nonlinear Rigid Folding (Iterative SVD)")
+        ax.axis('off')
+
+        # Use the final folded state to set the camera bounding box
+        max_coords = trajectory[-1]
+        all_coords = np.vstack((original_coords, max_coords))
+        max_range = np.ptp(all_coords, axis=0).max() / 2.0
+        mid = np.mean(original_coords, axis=0)
+        ax.set_xlim(mid[0] - max_range, mid[0] + max_range)
+        ax.set_ylim(mid[1] - max_range, mid[1] + max_range)
+        ax.set_zlim(mid[2] - max_range, mid[2] + max_range)
+
+        # Initialize lines
+        bar_lines = [ax.plot([], [], [], color='black', alpha=0.3, linewidth=1)[0] for _ in self.bars]
+        hinge_lines = [ax.plot([], [], [], color='blue' if h.fold_assignment == 'M' else 'red', linewidth=3)[0] for h in self.hinges]
+
+        def update(frame):
+            # Ping-pong loop calculation
+            max_frame = len(trajectory) - 1
+            cycle_length = max_frame * 2
+            current_frame = frame % cycle_length
+            if current_frame > max_frame:
+                current_frame = cycle_length - current_frame # reverse direction
+                
+            current_coords = trajectory[current_frame]
+
+            for i, bar in enumerate(self.bars):
+                p1, p2 = current_coords[bar.nodes[0].id], current_coords[bar.nodes[1].id]
+                bar_lines[i].set_data([p1[0], p2[0]], [p1[1], p2[1]])
+                bar_lines[i].set_3d_properties([p1[2], p2[2]])
+
+            for i, h in enumerate(self.hinges):
+                p1, p2 = current_coords[h.node_j.id], current_coords[h.node_k.id]
+                hinge_lines[i].set_data([p1[0], p2[0]], [p1[1], p2[1]])
+                hinge_lines[i].set_3d_properties([p1[2], p2[2]])
+
+            return bar_lines + hinge_lines
+
+        ani = animation.FuncAnimation(fig, update, frames=len(trajectory)*2, interval=interval, blit=False)
+        plt.show()
+
+    def get_instantaneous_mechanism(self, target_fold_vector):
+        """
+        A silent, streamlined version of analyze_sensitivity used purely for 
+        iterative path integration. Returns the normalized displacement vector.
+        """
+        J = self.build_dihedral_jacobian()
+        C = self.build_constraint_matrix()
+
+        _, sv, Vh = np.linalg.svd(C)
+        
+        # Isolate mechanisms (thresholds might need tuning once out of flat state)
+        mechanism_indices = []
+        for i in range(Vh.shape[0]):
+            s_val = sv[i] if i < len(sv) else 0.0
+            if s_val < 1e-6: # Relaxed slightly for numerical drift during integration
+                v = Vh[i, :]
+                fold_changes = J @ v
+                if np.sum(np.abs(fold_changes)) >= 1e-5:
+                    mechanism_indices.append(i)
+
+        if not mechanism_indices:
+            return None # Pattern has locked up (kinematic singularity)
+
+        Q = Vh[mechanism_indices, :]
+        A = J @ Q.T
+
+        U_sv, S_sv, Vt_sv = np.linalg.svd(A, full_matrices=False)
+
+        # Find best match to target fold vector
+        best_r = 0
+        best_cos = -1.0
+        if np.linalg.norm(target_fold_vector) > 1e-12:
+            for r in range(len(S_sv)):
+                if S_sv[r] < 1e-3 * S_sv[0]: continue
+                cos = np.dot(U_sv[:, r], target_fold_vector) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(target_fold_vector))
+                if abs(cos) > best_cos:
+                    best_cos = abs(cos)
+                    best_r = r
+
+        v_dominant = Q.T @ Vt_sv[best_r, :]
+        best_sens = U_sv[:, best_r] * S_sv[best_r]
+
+        # Keep the global sign consistent with the target
+        if np.dot(best_sens, target_fold_vector) < 0:
+            v_dominant = -v_dominant
+
+        return v_dominant
+    
+    def step_and_reanalyze(self, step_scale=0.03, show_plot=False):
+        """
+        Pushes the flat pattern slightly into the 3D deployed state using the 
+        linear tangent vector (v_dominant), and re-runs the sensitivity analysis.
+        This breaks the flat-state singularity.
+        """
+        print(f"\n{'='*60}")
+        print(f" STEPPING OUT OF FLAT STATE (Step Scale: {step_scale})")
+        print(f"{'='*60}")
+
+        # 1. Ensure we have a dominant mode to follow from the flat state
+        if not hasattr(self, 'v_dominant') or self.v_dominant is None:
+            print("Running initial flat-state analysis to find deployment path...")
+            self.analyze_sensitivity(show_plot=False)
+            
+        # 2. Reshape the 1D displacement vector into (N, 3) for the nodes
+        v_reshaped = self.v_dominant.reshape(-1, 3)
+
+        # 3. Apply the displacement to every node
+        for i, node in enumerate(self.nodes):
+            node.coordinates = node.coordinates + (v_reshaped[i] * step_scale)
+
+        print(f"Nodes perturbed by {step_scale} * v_dominant. Re-running analysis on 3D geometry...\n")
+        
+        # 4. Re-run the analysis on the now-3D geometry
+        new_sensitivity = self.analyze_sensitivity(show_plot=show_plot)
+        
+        return new_sensitivity
+
+    def get_characteristic_length(self):
+        """
+        Calculates the bounding radius of the array from its geometric center
+        using the raw .fold file coordinates.
+        """
+        coords = np.array(self.coordinates)
+        center = np.mean(coords, axis=0) # Find the geometric center (X,Y,Z)
+        
+        # Calculate the distance from the center to every single vertex
+        distances = np.linalg.norm(coords - center, axis=1)
+        
+        # The characteristic length is the distance to the furthest vertex
+        return np.max(distances)
     
     def isolate_mechanism_subspace(self, singular_values, Vh, dihedral_jacobian):
         """Filters the null space to remove pure rigid body motions and zero-energy noise."""
@@ -587,38 +833,38 @@ class SensitivityModel:
         unique_edges = set()
         bars = []
 
+        for panel in self.panels:
+            # Connect every node to every other node in this specific panel
+            for node_a, node_b in itertools.combinations(panel.nodes,2):
+
+                # Sort IDs to ensure Edge(1,2) = Edge (2,1)
+                edge_id = tuple(sorted((node_a.id, node_b.id)))
+
+                if edge_id not in unique_edges:
+                    unique_edges.add(edge_id)
+                    #Add the rigid bar
+                    bars.append(BarElement(node_a, node_b))
+
         # for panel in self.panels:
-        #     # Connect every node to every other node in this specific panel
-        #     for node_a, node_b in itertools.combinations(panel.nodes,2):
+        #     nodes = panel.nodes
+        #     n = len(nodes)
 
-        #         # Sort IDs to ensure Edge(1,2) = Edge (2,1)
-        #         edge_id = tuple(sorted((node_a.id, node_b.id)))
-
+        #     # 1. All perimeter edges
+        #     for i in range(n):
+        #         a, b = nodes[i], nodes[(i + 1) % n]
+        #         edge_id = tuple(sorted((a.id, b.id)))
         #         if edge_id not in unique_edges:
         #             unique_edges.add(edge_id)
-        #             #Add the rigid bar
-        #             bars.append(BarElement(node_a, node_b))
+        #             bars.append(BarElement(a, b))
 
-        for panel in self.panels:
-            nodes = panel.nodes
-            n = len(nodes)
-
-            # 1. All perimeter edges
-            for i in range(n):
-                a, b = nodes[i], nodes[(i + 1) % n]
-                edge_id = tuple(sorted((a.id, b.id)))
-                if edge_id not in unique_edges:
-                    unique_edges.add(edge_id)
-                    bars.append(BarElement(a, b))
-
-            # 2. Fan diagonals from node 0 to nodes 2, 3, ..., n-2
-            #    (node 0→1 and node 0→n-1 are already perimeter edges)
-            for i in range(2, n - 1):
-                a, b = nodes[0], nodes[i]
-                edge_id = tuple(sorted((a.id, b.id)))
-                if edge_id not in unique_edges:
-                    unique_edges.add(edge_id)
-                    bars.append(BarElement(a, b))
+        #     # 2. Fan diagonals from node 0 to nodes 2, 3, ..., n-2
+        #     #    (node 0→1 and node 0→n-1 are already perimeter edges)
+        #     for i in range(2, n - 1):
+        #         a, b = nodes[0], nodes[i]
+        #         edge_id = tuple(sorted((a.id, b.id)))
+        #         if edge_id not in unique_edges:
+        #             unique_edges.add(edge_id)
+        #             bars.append(BarElement(a, b))
 
         return bars
 
