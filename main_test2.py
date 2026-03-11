@@ -1,4 +1,4 @@
-#%%
+
 from flask import json
 import numpy as np
 import matplotlib.pyplot as plt
@@ -36,7 +36,7 @@ def set_up_bloom(m=5,h=1,s=1,file_name=None, show_plot=None, Show_Origin=1, Show
 filename_Y6_1 = "Y6_1.fold"
 set_up_bloom(m=6,h=1,s=1,file_name=filename_Y6_1) 
 Y6_1 = SensitivityModel(filename_Y6_1)
-Y6_1.analyze_sensitivity(show_plot='yes')
+Y6_1.analyze_sensitivity(show_plot='yes',plot_title="Y6.1")
 plt.close('all')
 
 #%% Brooklyn Cut

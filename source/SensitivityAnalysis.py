@@ -33,7 +33,7 @@ class SensitivityModel:
         self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
         
-    def analyze_sensitivity(self, show_plot=None):
+    def analyze_sensitivity(self, show_plot=None, plot_title=" "):
         """
         Identifies the physical folding mechanism via SVD. Auto-calibrates 
         hinges to align with target M/V assignments from the .fold file.
@@ -67,7 +67,7 @@ class SensitivityModel:
 
         # 8. Non-dimensionalize sensitivity by characteristic length to get units of radians per model-length-unit
         characteristic_length = self.get_characteristic_length()
-        best_sensitivity = best_sensitivity# * characteristic_length
+        best_sensitivity = best_sensitivity * characteristic_length
         
         print(f"\nNon-dimensionalized sensitivity using characteristic length: {characteristic_length:.4f} units")
 
@@ -84,7 +84,7 @@ class SensitivityModel:
         
         if show_plot is 'yes':
             self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
-                                    title="Dominant Folding Mechanism (Sensitivity Vector)",
+                                    title=plot_title,
                                     normalize=True)
 
         self.best_sensitivity = best_sensitivity
@@ -936,32 +936,19 @@ class SensitivityModel:
     def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=False, show_hinge_labels=False, title="Pattern", normalize=True):
         """
         Plot the origami pattern with:
-          - Bars drawn in light grey
-          - Hinges color-coded by sensitivity (blue = Mountain/+, red = Valley/-)
-          - Hinge IDs labeled (raw sensitivity values removed for cleaner plots)
-          - Optional nodal displacement vectors drawn as quiver arrows
+          - Pattern boundary edges drawn in light grey (internal cross-bars hidden).
           - Top-down view locked for publication-ready figures.
-
-        Parameters
-        ----------
-        sensitivity_vector : array-like, optional
-            One value per hinge. Drives hinge color.
-        nodal_vectors : array-like, optional
-            Flat 1D array of length 3*n_nodes (or shape (n_nodes, 3)).
-            Drawn as quiver arrows at each node to show the null-space
-            displacement direction.
-        vector_scale : float
-            Arrow length scale for the quiver plot.
-        vector_color : str
-            Color for the quiver arrows.
-        normalize : bool
-            If True, the colormap is normalized to [-1, +1].
+          - Hinges colored strictly by absolute fold rate magnitude (0 to 1).
+          - Hinge styles based on direction: Mountain (+) = Solid, Valley (-) = Dashed.
+          - Optional nodal displacement vectors drawn as quiver arrows.
         """
+        import matplotlib.lines as mlines
+        
         plt.close('all')
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
-        # --- Sensitivity data ---
+        # --- Sensitivity data & Normalization ---
         raw_sens = np.zeros(len(self.hinges))
         if sensitivity_vector is not None:
             raw_sens = np.array(sensitivity_vector).flatten()
@@ -971,18 +958,19 @@ class SensitivityModel:
             max_abs_val = 1.0
 
         if normalize:
-            plot_sens = raw_sens / max_abs_val
+            # Scale absolute magnitudes from 0 to 1
+            abs_sens = np.abs(raw_sens) / max_abs_val
             limit = 1.0
         else:
-            plot_sens = raw_sens.copy()
+            abs_sens = np.abs(raw_sens)
             limit = max_abs_val
 
         # --- Color map ---
-        # RdBu_r is excellent for publications: colorblind-friendly and standard for divergent (+/-) data
-        cmap = plt.cm.RdBu
-        cnorm = plt.Normalize(-limit, limit)
+        # Viridis is the academic standard for sequential data (0 to 1)
+        cmap = plt.cm.Blues
+        cnorm = plt.Normalize(0, limit)
 
-        # --- Nodes & Bars ---
+        # --- Nodes ---
         xs = [n.coordinates[0] for n in self.nodes]
         ys = [n.coordinates[1] for n in self.nodes]
         zs = [n.coordinates[2] for n in self.nodes]
@@ -993,25 +981,30 @@ class SensitivityModel:
                 ax.text(n.coordinates[0], n.coordinates[1], n.coordinates[2],
                         f"{n.id}", fontsize=8, color='grey')
 
-        # --- Panel Outlines (No Internal Cross Bars) ---
+        # --- Pattern Boundary Outlines (No Internal Cross Bars) ---
+        edge_panel_counts = {}
+        for panel in self.panels:
+            num_nodes = len(panel.nodes)
+            for i in range(num_nodes):
+                node_a = panel.nodes[i]
+                node_b = panel.nodes[(i + 1) % num_nodes]
+                edge_id = tuple(sorted((node_a.id, node_b.id)))
+                edge_panel_counts[edge_id] = edge_panel_counts.get(edge_id, 0) + 1
+        
         plotted_edges = set()
         for panel in self.panels:
             num_nodes = len(panel.nodes)
             for i in range(num_nodes):
-                # Grab the current node and the next node (wrapping around to the start)
                 node_a = panel.nodes[i]
                 node_b = panel.nodes[(i + 1) % num_nodes]
-                
-                # Create a unique key for the edge, independent of direction
                 edge_id = tuple(sorted((node_a.id, node_b.id)))
                 
-                if edge_id not in plotted_edges:
+                # Plot only if it's a true boundary edge (belongs to 1 panel)
+                if edge_panel_counts[edge_id] == 1 and edge_id not in plotted_edges:
                     plotted_edges.add(edge_id)
                     p1, p2 = node_a.coordinates, node_b.coordinates
-                    
-                    # Plot the perimeter edge
                     ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                            color='black', alpha=0.3, linewidth=1)
+                            color='black', alpha=0.5, linewidth=1.5)
 
         # --- Nodal displacement vectors (quiver) ---
         if nodal_vectors is not None:
@@ -1021,32 +1014,33 @@ class SensitivityModel:
             if nv.ndim == 2 and len(nv) == len(self.nodes) and nv.shape[1] == 3:
                 ax.quiver(xs, ys, zs,
                           nv[:, 0], nv[:, 1], nv[:, 2],
-                          color=vector_color,
-                          length=vector_scale,
-                          normalize=False,
-                          arrow_length_ratio=0.15)
-            else:
-                print(f"Warning: nodal_vectors shape {nv.shape} doesn't match "
-                      f"({len(self.nodes)}, 3). Skipping quiver plot.")
+                          color=vector_color, length=vector_scale,
+                          normalize=False, arrow_length_ratio=0.15)
 
-        # --- Hinges: color-coded lines + sensitivity labels ---
+        # --- Hinges: Color = Magnitude, LineStyle = Mountain/Valley ---
         for h_id, h in enumerate(self.hinges):
             p_j = h.node_j.coordinates
             p_k = h.node_k.coordinates
-            color = cmap(cnorm(plot_sens[h_id]))
+            
+            raw_val = raw_sens[h_id]
+            mag_val = abs_sens[h_id]
+            
+            # Mountain (+) = Solid, Valley (-) = Dashed
+            # Custom Dash: (0 offset, (3 points on, 2 points off))
+            l_style = '-' if raw_val >= -1e-9 else (0, (3, 2)) 
+            color = cmap(cnorm(mag_val))
 
             ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]],
-                    color=color, linestyle='-', linewidth=3.0, alpha=0.9)
+                    color=color, linestyle=l_style, linewidth=3.5, alpha=0.95)
 
             if show_hinge_labels:
                 mid = (p_j + p_k) / 2
-                # Removed raw values, just showing the hinge ID for clarity
                 label_text = f"H{h_id}"
                 ax.text(mid[0], mid[1], mid[2], label_text,
-                        color=color, fontsize=10, fontweight='bold',
+                        color='black', fontsize=10, fontweight='bold',
                         path_effects=[PathEffects.withStroke(linewidth=2, foreground='white')])
 
-        # --- Axis limits ---
+        # --- Axis limits & Top-Down Publication View ---
         all_coords = np.array([xs, ys, zs])
         max_range = np.ptp(all_coords, axis=1).max() / 2.0
         mid_x = np.mean(all_coords[0])
@@ -1056,20 +1050,21 @@ class SensitivityModel:
         ax.set_ylim(mid_y - max_range, mid_y + max_range)
         ax.set_zlim(mid_z - max_range, mid_z + max_range)
 
-        # --- Top-Down Publication View ---
         ax.view_init(elev=90, azim=-90)
-        ax.set_axis_off() # Removes the grey background panes and gridlines
+        ax.set_axis_off()
+        ax.set_title(title, pad=20)
 
-        ax.set_title(title)
-
-        # --- Colorbar ---
+        # --- Colorbar (Magnitude) ---
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
         sm.set_array([])
         cbar = plt.colorbar(sm, ax=ax, shrink=0.5, pad=0.05)
-        
-        # Format the colorbar for a cleaner look
-        cbar_label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Sensitivity (rad)'
+        cbar_label = 'Absolute Normalized Fold Rate' if normalize else 'Absolute Hinge Sensitivity (rad/unit)'
         cbar.set_label(cbar_label, rotation=270, labelpad=20)
         cbar.outline.set_visible(False)
+
+        # --- Custom Legend for M/V Line Styles ---
+        mountain_line = mlines.Line2D([], [], color='gray', linestyle='-', linewidth=3, label='Mountain (+)')
+        valley_line = mlines.Line2D([], [], color='gray', linestyle='--', linewidth=3, label='Valley (-)')
+        ax.legend(handles=[mountain_line, valley_line], loc='upper right', frameon=False)
 
         plt.show()
