@@ -26,11 +26,11 @@ class SensitivityModel:
         """ Upon initializing this class makes the origami pattern, then adds the bars between
         nodes in a panel to make it rigid, and also slaps on some hinges. Telling it where the hignes
         are is helpful for calculatring the dihedral angle jacobian. """
-        self.coordinates, self.panel_indices, self.crease_info, self.boundary_edges = self.extract_pattern_data_from_fold_file(fold_file_path)
+        self.coordinates, self.panel_indices, self.crease_info = self.extract_pattern_data_from_fold_file(fold_file_path)
 
         self.nodes, self.panels = self.generate_geometry(self.coordinates, self.panel_indices)
 
-        self.bars = self.generate_bars_flasher()
+        self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
         
     def analyze_sensitivity(self, show_plot=None):
@@ -67,7 +67,7 @@ class SensitivityModel:
 
         # 8. Non-dimensionalize sensitivity by characteristic length to get units of radians per model-length-unit
         characteristic_length = self.get_characteristic_length()
-        best_sensitivity = best_sensitivity * characteristic_length
+        best_sensitivity = best_sensitivity# * characteristic_length
         
         print(f"\nNon-dimensionalized sensitivity using characteristic length: {characteristic_length:.4f} units")
 
@@ -85,7 +85,6 @@ class SensitivityModel:
         if show_plot is 'yes':
             self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
                                     title="Dominant Folding Mechanism (Sensitivity Vector)",
-                                    show_hinge_labels=False,
                                     normalize=True)
 
         self.best_sensitivity = best_sensitivity
@@ -758,7 +757,6 @@ class SensitivityModel:
         # extract crease lines
         # M = mountian V = valley B = boundry U = unassigned
         crease_info = {}
-        boundary_edges = []
         if 'edges_vertices' in data and 'edges_assignment' in data:
             for edge, assignment in zip(data['edges_vertices'], data['edges_assignment']):
                 # Filter for Mountains and Valleys only
@@ -766,9 +764,6 @@ class SensitivityModel:
                     # Sort indices so (1,2) is the same as (2,1)
                     u, v = sorted(edge)
                     crease_info[(u, v)] = assignment
-
-                elif assignment in ['B', 'P']:
-                    boundary_edges.append((u,v))
 
                     """
                     crease_info is a dictionary that looks like this:
@@ -780,7 +775,7 @@ class SensitivityModel:
                     }
                     """
 
-        return coordinates, panel_indices, crease_info,boundary_edges
+        return coordinates, panel_indices, crease_info
 
     def generate_geometry(self,coordinates, panel_indices):
         """ Generates the node objects and the panel obejects.
@@ -873,68 +868,6 @@ class SensitivityModel:
 
         return bars
 
-    def generate_bars_flasher(self):
-        """
-        Creates a rigid "truss" for every panel.
-
-        Step 1 — per-panel: connect every node to every other node within
-        each face (e.g. 4-node face → 6 bars including both diagonals).
-
-        Step 2 — cross-panel: some .fold files split a flat quadrilateral
-        into two triangular faces sharing a diagonal edge (with a non-M/V
-        assignment like 'U' or 'F').  After Step 1, the merged 4-node
-        region only has 5 bars — missing the other diagonal — which leaves
-        one out-of-plane bending DOF that looks like a phantom hinge.
-        For every pair of adjacent faces that share a non-fold edge, we add
-        the cross-diagonal bar(s) between their non-shared nodes to close
-        that gap.
-        """
-        unique_edges = set()
-        bars = []
-
-        # Step 1: all pairwise bars within each panel face
-        for panel in self.panels:
-            for node_a, node_b in itertools.combinations(panel.nodes, 2):
-                edge_id = tuple(sorted((node_a.id, node_b.id)))
-                if edge_id not in unique_edges:
-                    unique_edges.add(edge_id)
-                    bars.append(BarElement(node_a, node_b))
-
-        # Step 2: cross-diagonal bars for non-fold shared edges
-        # Build a temporary edge → panels map (same logic as generate_hinges)
-        edge_to_panels = {}
-        for panel in self.panels:
-            n = len(panel.nodes)
-            for i in range(n):
-                a = panel.nodes[i]
-                b = panel.nodes[(i + 1) % n]
-                key = tuple(sorted((a.id, b.id)))
-                edge_to_panels.setdefault(key, []).append(panel)
-
-        for edge_key, panel_list in edge_to_panels.items():
-            if len(panel_list) != 2:
-                continue  # boundary edge — only one panel, nothing to do
-
-            # Skip actual fold lines; those edges become hinges, not bars
-            if self.crease_info and edge_key in self.crease_info:
-                continue
-
-            # Add a bar between every non-shared node of the two panels.
-            # For two triangles sharing one edge this adds exactly the one
-            # missing cross-diagonal, making the combined region fully rigid.
-            p1, p2 = panel_list
-            non_shared_1 = [n for n in p1.nodes if n.id not in edge_key]
-            non_shared_2 = [n for n in p2.nodes if n.id not in edge_key]
-            for na in non_shared_1:
-                for nb in non_shared_2:
-                    eid = tuple(sorted((na.id, nb.id)))
-                    if eid not in unique_edges:
-                        unique_edges.add(eid)
-                        bars.append(BarElement(na, nb))
-
-        return bars
-
-
     def generate_hinges(self):
         """ Creates a hinge where the .fold file says there should be a hinge. If there is no .fold file,
           it creates a hinge between every edge that has 2 panels on it."""
@@ -1000,64 +933,85 @@ class SensitivityModel:
         
         return hinges
     
+    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=False, show_hinge_labels=False, title="Pattern", normalize=True):
+        """
+        Plot the origami pattern with:
+          - Bars drawn in light grey
+          - Hinges color-coded by sensitivity (blue = Mountain/+, red = Valley/-)
+          - Hinge IDs labeled (raw sensitivity values removed for cleaner plots)
+          - Optional nodal displacement vectors drawn as quiver arrows
+          - Top-down view locked for publication-ready figures.
 
-    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
-        """ Plot the origami pattern (Publication Ready) """
+        Parameters
+        ----------
+        sensitivity_vector : array-like, optional
+            One value per hinge. Drives hinge color.
+        nodal_vectors : array-like, optional
+            Flat 1D array of length 3*n_nodes (or shape (n_nodes, 3)).
+            Drawn as quiver arrows at each node to show the null-space
+            displacement direction.
+        vector_scale : float
+            Arrow length scale for the quiver plot.
+        vector_color : str
+            Color for the quiver arrows.
+        normalize : bool
+            If True, the colormap is normalized to [-1, +1].
+        """
         plt.close('all')
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
-        
-        # --- View & Projection (Top-down, Orthographic) ---
-        ax.view_init(elev=90, azim=-90)
-        ax.set_proj_type('ortho')
-        
+
         # --- Sensitivity data ---
         raw_sens = np.zeros(len(self.hinges))
         if sensitivity_vector is not None:
             raw_sens = np.array(sensitivity_vector).flatten()
-            
+
         max_abs_val = np.max(np.abs(raw_sens))
         if max_abs_val < 1e-12:
             max_abs_val = 1.0
-            
+
         if normalize:
             plot_sens = raw_sens / max_abs_val
             limit = 1.0
         else:
             plot_sens = raw_sens.copy()
             limit = max_abs_val
-            
-        # --- Color map (Blue = Mountain/+, Red = Valley/-) ---
+
+        # --- Color map ---
+        # RdBu_r is excellent for publications: colorblind-friendly and standard for divergent (+/-) data
         cmap = plt.cm.RdBu
         cnorm = plt.Normalize(-limit, limit)
-        
-        # --- Nodes ---
+
+        # --- Nodes & Bars ---
         xs = [n.coordinates[0] for n in self.nodes]
         ys = [n.coordinates[1] for n in self.nodes]
         zs = [n.coordinates[2] for n in self.nodes]
-        # Pushed zorder back so they sit under the lines
-        ax.scatter(xs, ys, zs, c='black', s=10, alpha=0.5, zorder=1)
-        
+        ax.scatter(xs, ys, zs, c='black', s=20, alpha=0.4)
+
         if show_node_labels:
             for n in self.nodes:
-                ax.text(n.coordinates[0], n.coordinates[1], n.coordinates[2], 
-                        f"{n.id}", fontsize=8, color='grey', zorder=5)
-                        
-        # ==========================================
-        # --- EXPLICIT BOUNDARY EDGES (.fold Data) ---
-        # ==========================================
-        if hasattr(self, 'boundary_edges'):
-            for edge in self.boundary_edges:
-                n1_id, n2_id = edge
-                # Find the actual node objects safely
-                n1 = next((n for n in self.nodes if n.id == n1_id), None)
-                n2 = next((n for n in self.nodes if n.id == n2_id), None)
+                ax.text(n.coordinates[0], n.coordinates[1], n.coordinates[2],
+                        f"{n.id}", fontsize=8, color='grey')
+
+        # --- Panel Outlines (No Internal Cross Bars) ---
+        plotted_edges = set()
+        for panel in self.panels:
+            num_nodes = len(panel.nodes)
+            for i in range(num_nodes):
+                # Grab the current node and the next node (wrapping around to the start)
+                node_a = panel.nodes[i]
+                node_b = panel.nodes[(i + 1) % num_nodes]
                 
-                if n1 and n2:
-                    p1, p2 = n1.coordinates, n2.coordinates
-                    # Zorder=3 forces the black boundary to render on top
-                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]], 
-                            color='black', alpha=1.0, linewidth=2.5, zorder=3)
+                # Create a unique key for the edge, independent of direction
+                edge_id = tuple(sorted((node_a.id, node_b.id)))
+                
+                if edge_id not in plotted_edges:
+                    plotted_edges.add(edge_id)
+                    p1, p2 = node_a.coordinates, node_b.coordinates
+                    
+                    # Plot the perimeter edge
+                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                            color='black', alpha=0.3, linewidth=1)
 
         # --- Nodal displacement vectors (quiver) ---
         if nodal_vectors is not None:
@@ -1065,27 +1019,33 @@ class SensitivityModel:
             if nv.ndim == 1 and len(nv) == 3 * len(self.nodes):
                 nv = nv.reshape(-1, 3)
             if nv.ndim == 2 and len(nv) == len(self.nodes) and nv.shape[1] == 3:
-                ax.quiver(xs, ys, zs, nv[:, 0], nv[:, 1], nv[:, 2], 
-                          color=vector_color, length=vector_scale, 
-                          normalize=False, arrow_length_ratio=0.15, linewidth=1.5, zorder=5)
+                ax.quiver(xs, ys, zs,
+                          nv[:, 0], nv[:, 1], nv[:, 2],
+                          color=vector_color,
+                          length=vector_scale,
+                          normalize=False,
+                          arrow_length_ratio=0.15)
             else:
-                print(f"Warning: nodal_vectors shape {nv.shape} doesn't match ({len(self.nodes)}, 3). Skipping quiver plot.")
-                
+                print(f"Warning: nodal_vectors shape {nv.shape} doesn't match "
+                      f"({len(self.nodes)}, 3). Skipping quiver plot.")
+
         # --- Hinges: color-coded lines + sensitivity labels ---
         for h_id, h in enumerate(self.hinges):
             p_j = h.node_j.coordinates
             p_k = h.node_k.coordinates
             color = cmap(cnorm(plot_sens[h_id]))
-            ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]], 
-                    color=color, linestyle='-', linewidth=3.5, alpha=1.0, zorder=2)
-                    
+
+            ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]],
+                    color=color, linestyle='-', linewidth=3.0, alpha=0.9)
+
             if show_hinge_labels:
                 mid = (p_j + p_k) / 2
-                label_text = f"{raw_sens[h_id]:.2f}"
-                ax.text(mid[0], mid[1], mid[2], label_text, color='black', 
-                        fontsize=10, fontweight='bold', 
-                        path_effects=[PathEffects.withStroke(linewidth=2.5, foreground='white')], zorder=6)
-                        
+                # Removed raw values, just showing the hinge ID for clarity
+                label_text = f"H{h_id}"
+                ax.text(mid[0], mid[1], mid[2], label_text,
+                        color=color, fontsize=10, fontweight='bold',
+                        path_effects=[PathEffects.withStroke(linewidth=2, foreground='white')])
+
         # --- Axis limits ---
         all_coords = np.array([xs, ys, zs])
         max_range = np.ptp(all_coords, axis=1).max() / 2.0
@@ -1095,20 +1055,21 @@ class SensitivityModel:
         ax.set_xlim(mid_x - max_range, mid_x + max_range)
         ax.set_ylim(mid_y - max_range, mid_y + max_range)
         ax.set_zlim(mid_z - max_range, mid_z + max_range)
-        
-        # --- Remove Global Grid/Axes ---
-        ax.set_axis_off()
-        
-        if title:
-            ax.set_title(title, fontsize=14, fontweight='bold', pad=20)
-            
+
+        # --- Top-Down Publication View ---
+        ax.view_init(elev=90, azim=-90)
+        ax.set_axis_off() # Removes the grey background panes and gridlines
+
+        ax.set_title(title)
+
         # --- Colorbar ---
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
         sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, shrink=0.6, aspect=20, pad=0.05)
-        cbar_label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Sensitivity (rad)'
-        cbar.set_label(cbar_label, rotation=270, labelpad=20, fontsize=12)
-        cbar.ax.tick_params(labelsize=10)
+        cbar = plt.colorbar(sm, ax=ax, shrink=0.5, pad=0.05)
         
+        # Format the colorbar for a cleaner look
+        cbar_label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Sensitivity (rad)'
+        cbar.set_label(cbar_label, rotation=270, labelpad=20)
+        cbar.outline.set_visible(False)
+
         plt.show()
-    
