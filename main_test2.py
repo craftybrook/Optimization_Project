@@ -53,7 +53,7 @@ if __name__ == "__main__":
     #                              normalize=True)
     try:
 
-        filename = "model_t_flasher.fold"
+        filename = "clean4_brooklyn_cut.fold"
         model_t_flasher = SensitivityModel(filename)
         model_t_flasher.analyze_sensitivity(show_plot=1)
         
