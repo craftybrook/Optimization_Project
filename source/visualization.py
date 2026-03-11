@@ -148,8 +148,66 @@ def calculate_stats(data: Union[np.ndarray, list], use_sample: bool = True) -> D
         "cv": cv
     }
 
-# --- Example Usage ---
-# test_data = [10.5, 12.1, 9.8, 11.2, 11.5, 10.9]
-# results = calculate_stats(test_data)
-# print(f"Mean: {results['mean']:.3f}")
-# print(f"CV: {results['cv']:.3f}")
+import matplotlib.pyplot as plt
+
+def plot_fold_pattern(fold_data, title="Crease Pattern"):
+    """
+    Plots a .fold dictionary using Matplotlib.
+    Mountain folds (M) are blue.
+    Valley folds (V) are red.
+    Boundaries (B) are black.
+    Unassigned/other (U/F) are gray.
+    """
+    
+    # Extract data from the dictionary
+    vertices = fold_data.get("vertices_coords", [])
+    edges = fold_data.get("edges_vertices", [])
+    assignments = fold_data.get("edges_assignment", [])
+    
+    # Setup color and linewidth mapping — standard origami drafting convention:
+    # M = Mountain: bold red dashed  (----)
+    # V = Valley:   light blue dash-dot  (-.-.)
+    # B = Boundary: thick black solid
+    style_map = {
+        "M": {"color": "#D62728", "linewidth": 2.5, "linestyle": "--"},
+        "V": {"color": "#5BC8F5", "linewidth": 1.5, "linestyle": "-."},
+        "B": {"color": "black",   "linewidth": 3.0, "linestyle": "-"},
+        "U": {"color": "gray",    "linewidth": 1.0, "linestyle": ":"},
+        "F": {"color": "gray",    "linewidth": 1.0, "linestyle": ":"}
+    }
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Iterate through edges and plot them
+    for i, edge in enumerate(edges):
+        v1_idx, v2_idx = edge
+        x_coords = [vertices[v1_idx][0], vertices[v2_idx][0]]
+        y_coords = [vertices[v1_idx][1], vertices[v2_idx][1]]
+        
+        # Default to 'U' (Unassigned) if assignment is missing or unknown
+        assign = assignments[i] if i < len(assignments) else "U"
+        style = style_map.get(assign, style_map["U"])
+        
+        ax.plot(x_coords, y_coords, 
+                color=style["color"], 
+                linewidth=style["linewidth"], 
+                linestyle=style["linestyle"])
+
+    # Format the plot for accurate geometric viewing
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel("X Coordinate")
+    ax.set_ylabel("Y Coordinate")
+    ax.grid(True, linestyle=':', alpha=0.6)
+    
+    # Create a custom legend matching the style_map above
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], color='#D62728', lw=2.5, linestyle='--', label='Mountain (M)'),
+        Line2D([0], [0], color='#5BC8F5', lw=1.5, linestyle='-.', label='Valley (V)'),
+        Line2D([0], [0], color='black',   lw=3.0, linestyle='-',  label='Boundary (B)')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+
+    plt.tight_layout()
+    plt.show()

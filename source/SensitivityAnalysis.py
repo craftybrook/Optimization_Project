@@ -67,7 +67,7 @@ class SensitivityModel:
 
         # 8. Non-dimensionalize sensitivity by characteristic length to get units of radians per model-length-unit
         characteristic_length = self.get_characteristic_length()
-        best_sensitivity = best_sensitivity #* characteristic_length
+        best_sensitivity = best_sensitivity# * characteristic_length
         
         print(f"\nNon-dimensionalized sensitivity using characteristic length: {characteristic_length:.4f} units")
 
@@ -117,7 +117,7 @@ class SensitivityModel:
             v_dom = self.get_instantaneous_mechanism(target_fold_vector)
             
             if v_dom is None:
-                print(f"Kinematic lock-up reached at step {step}.")
+                print(f"Something went wrong... maybe kinematic lock-up reached at step {step}.")
                 break
                 
             steps_taken.append(step + 1)
@@ -131,7 +131,7 @@ class SensitivityModel:
             for i, h in enumerate(self.hinges):
                 vec = h.node_k.coordinates - h.node_j.coordinates
                 current_length = np.linalg.norm(vec)
-                error = abs(current_length - initial_hinge_lengths[i])
+                error = abs(current_length - initial_hinge_lengths[i])/initial_hinge_lengths[i]
                 hinge_errors[i].append(error)
 
         # 3. Reset model back to pristine flat state
@@ -157,7 +157,7 @@ class SensitivityModel:
         plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         plt.tight_layout()
         plt.show()
-        
+
     def animate_nonlinear_folding(self, num_steps=1000, step_size=0.01, interval=50):
         """
         Integrates the folding path by re-evaluating the SVD at every frame.

@@ -1,10 +1,12 @@
+from flask import json
 import numpy as np
 import matplotlib.pyplot as plt
 
 from source.SensitivityAnalysis import SensitivityModel
 from source.Bloom_Yoshimura import Bloom_Yoshimura
-from source.visualization import plot_sensitivity_violin
+from source.visualization import plot_sensitivity_violin, plot_fold_pattern
 
+from source.Bloom_Yoshimura import generate_miura_fold
 
 
 
@@ -38,12 +40,30 @@ def set_up_bloom(m=5,h=1,s=1,file_name=None, show_plot = None,Show_Origin=1, Sho
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
-        filename = "birdsfoot4.fold"
-        birdsfoot_model = SensitivityModel(filename)
-        birdsfoot_model.analyze_sensitivity(show_plot='yes')
-        birdsfoot_model.check_integration_rigidity(num_steps=1000, step_size= 0.001)
 
+        filename = "clean4_brooklyn_cut.fold"
+        brooklyn_cut = SensitivityModel(filename)
+        brooklyn_cut.analyze_sensitivity(show_plot='yes')
+        plot_fold_pattern(brooklyn_cut.fold_data, title="Brooklyn Cut Pattern")
+        # filename = "birdsfoot4.fold"
+        # birdsfoot_model = SensitivityModel(filename)
+        # birdsfoot_model.analyze_sensitivity(show_plot='yes')
+        # birdsfoot_model.check_integration_rigidity(num_steps=200, step_size= 0.01)
+        # birdsfoot_model.animate_nonlinear_folding(num_steps=200, step_size=0.01, interval=100)
         
+
+        # filename = "miura_ori.fold"
+        # fold_data = generate_miura_fold(cols=2, rows=5, dx=20.0, dy=20.0, tilt=4.0)
+        # with open(filename, "w") as f:   
+        #     json.dump(fold_data, f, indent=2)
+        # plot_fold_pattern(fold_data, title="Miura-ori Deployable Array")
+
+        # miura_ori = SensitivityModel(filename)
+        # miura_ori.analyze_sensitivity(show_plot='yes')
+        # miura_ori.step_and_reanalyze(step_scale=0.0005, show_plot='yes')
+        # miura_ori.check_integration_rigidity(num_steps=100, step_size=.001)
+        # miura_ori.animate_nonlinear_folding(num_steps=3000, step_size=0.01, interval=10)
+
         # filename_r1_h3_m5_flasher = "r1_h3_m5_flasher.fold"
         # r1_h3_m5_flasher = SensitivityModel(filename_r1_h3_m5_flasher)
         # r1_h3_m5_flasher.analyze_sensitivity(show_plot='yes')
@@ -57,7 +77,8 @@ if __name__ == "__main__":
         # filename_r1_h2_m5_flasher = "r1_h2_m5_flasher.fold"
         # r1_h2_m5_flasher = SensitivityModel(filename_r1_h2_m5_flasher)
         # r1_h2_m5_flasher.analyze_sensitivity(show_plot='yes')
-        # r1_h2_m5_flasher.animate_nonlinear_folding()
+        # r1_h2_m5_flasher.check_integration_rigidity(num_steps=500, step_size= 0.01)
+        # r1_h2_m5_flasher.animate_nonlinear_folding(num_steps=500, step_size=0.01, interval=10)
         # plt.close('all')
 
         # filename_r1_h1_m6_flasher = "r1_h1_m6_flasher.fold"
@@ -69,20 +90,22 @@ if __name__ == "__main__":
         # set_up_bloom(m=6,h=1,s=1,file_name=filename_Y6_1) 
         # Y6_1 = SensitivityModel(filename_Y6_1)
         # Y6_1.analyze_sensitivity(show_plot='yes')
-        # Y6_1.animate_nonlinear_folding()
-        # plt.close('all') 
+        # Y6_1.check_integration_rigidity(num_steps=500, step_size= 0.01)
+        # Y6_1.animate_nonlinear_folding(num_steps=1000, step_size=0.01,interval=10)
+        # plt.close('all')
         
         # filename_Y5_1 = "Y5_1.fold"
         # set_up_bloom(m=5,h=1,s=1,file_name=filename_Y5_1) 
         # Y5_1 = SensitivityModel(filename_Y5_1)
-        # Y5_1.analyze_sensitivity(show_plot='no')
+        # Y5_1.analyze_sensitivity(show_plot='yes')
         # plt.close('all')
 
         # filename_Y6_2 = "Y6_2.fold"
         # set_up_bloom(m=6,h=2,s=1,file_name=filename_Y6_2) 
         # Y6_2 = SensitivityModel(filename_Y6_2)
         # Y6_2.analyze_sensitivity(show_plot='no')
-        # Y6_2.check_integration_rigidity(num_steps=100, step_size= 0.01)
+        # Y6_2.check_integration_rigidity(num_steps=500, step_size= 0.01)
+        # Y6_2.animate_nonlinear_folding(num_steps=500, step_size=0.01)
         # plt.close('all') 
 
         # # --- Data Collection ---
