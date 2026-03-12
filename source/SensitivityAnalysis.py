@@ -3,6 +3,7 @@ import sympy as sp
 import itertools
 import json
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib.patheffects as PathEffects
 from scipy.linalg import eigh
 from matplotlib import animation
@@ -33,7 +34,7 @@ class SensitivityModel:
         self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
         
-    def analyze_sensitivity(self, show_plot=None, plot_title=" "):
+    def analyze_sensitivity(self, show_plot=None, plot_title=None,show_colorbar=True, save_path=None):
         """
         Identifies the physical folding mechanism via SVD. Auto-calibrates 
         hinges to align with target M/V assignments from the .fold file.
@@ -83,9 +84,11 @@ class SensitivityModel:
         )
         
         if show_plot is 'yes':
-            self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
+            self.plot_pattern_vector(best_sensitivity,
                                     title=plot_title,
-                                    normalize=True)
+                                    normalize=True,
+                                    show_colorbar=show_colorbar,
+                                    save_path=save_path)
 
         self.best_sensitivity = best_sensitivity
         self.v_dominant = v_dominant
@@ -933,7 +936,7 @@ class SensitivityModel:
         
         return hinges
     
-    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=False, show_hinge_labels=False, title="Pattern", normalize=True):
+    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=False, show_hinge_labels=False, title="Pattern", show_colorbar=True, normalize=True, save_path=None):
         """
         Plot the origami pattern with:
           - Pattern boundary edges drawn in light grey (internal cross-bars hidden).
@@ -943,6 +946,7 @@ class SensitivityModel:
           - Optional nodal displacement vectors drawn as quiver arrows.
         """
         import matplotlib.lines as mlines
+        import matplotlib.colors as mcolors # Added this so your custom colormap works!
         
         plt.close('all')
         fig = plt.figure(figsize=(10, 8))
@@ -964,10 +968,17 @@ class SensitivityModel:
         else:
             abs_sens = np.abs(raw_sens)
             limit = max_abs_val
-
+        
         # --- Color map ---
         # Viridis is the academic standard for sequential data (0 to 1)
-        cmap = plt.cm.Blues
+        base_cmap = plt.cm.viridis
+
+        # Sample the colormap from 0.3 to 1.0 (skipping the lightest 30%)
+        # Adjust 0.3 up or down to make the baseline yellow darker or lighter
+        color_subset = base_cmap(np.linspace(0.3, .99, 256))
+        
+        # Create a brand new, darker colormap
+        cmap = mcolors.ListedColormap(color_subset)
         cnorm = plt.Normalize(0, limit)
 
         # --- Nodes ---
@@ -1026,12 +1037,12 @@ class SensitivityModel:
             mag_val = abs_sens[h_id]
             
             # Mountain (+) = Solid, Valley (-) = Dashed
-            # Custom Dash: (0 offset, (3 points on, 2 points off))
-            l_style = '-' if raw_val >= -1e-9 else (0, (3, 2)) 
+            l_style = '-' if raw_val >= -1e-9 else (0, (2.0, 0.35)) 
+            
             color = cmap(cnorm(mag_val))
 
             ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]],
-                    color=color, linestyle=l_style, linewidth=3.5, alpha=0.95)
+                    color=color, linestyle=l_style, linewidth=5.5, alpha=0.95)
 
             if show_hinge_labels:
                 mid = (p_j + p_k) / 2
@@ -1052,19 +1063,26 @@ class SensitivityModel:
 
         ax.view_init(elev=90, azim=-90)
         ax.set_axis_off()
-        ax.set_title(title, pad=20)
+        ax.set_title(title, pad=0, y=0.95, fontsize=16, fontweight='bold')
 
         # --- Colorbar (Magnitude) ---
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, shrink=0.5, pad=0.05)
-        cbar_label = 'Absolute Normalized Fold Rate' if normalize else 'Absolute Hinge Sensitivity (rad/unit)'
-        cbar.set_label(cbar_label, rotation=270, labelpad=20)
-        cbar.outline.set_visible(False)
-
-        # --- Custom Legend for M/V Line Styles ---
-        mountain_line = mlines.Line2D([], [], color='gray', linestyle='-', linewidth=3, label='Mountain (+)')
-        valley_line = mlines.Line2D([], [], color='gray', linestyle='--', linewidth=3, label='Valley (-)')
-        ax.legend(handles=[mountain_line, valley_line], loc='upper right', frameon=False)
+        if show_colorbar:
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
+            sm.set_array([])
+            cbar = plt.colorbar(sm, ax=ax, shrink=0.6,aspect=15, pad=0.0005)
+            cbar.ax.tick_params(labelsize=20)
+            # You commented these out in your script, but you can turn them back on anytime!
+            # cbar_label = 'Absolute Normalized Fold Rate' if normalize else 'Absolute Hinge Sensitivity (rad/unit)'
+            # cbar.set_label(cbar_label, rotation=270, labelpad=20)
+            cbar.outline.set_visible(False)
+            
+        fig.tight_layout(pad=0)
+        
+        # --- Automated Save Logic ---
+        if save_path:
+            # bbox_inches='tight' crops out all the extra white space
+            # transparent=True removes the white background so it blends perfectly into the document
+            fig.savefig(save_path, format='pdf', bbox_inches='tight', transparent=True)
+            print(f"Saved high-res figure to: {save_path}")
 
         plt.show()
