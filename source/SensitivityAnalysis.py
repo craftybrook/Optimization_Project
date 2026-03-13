@@ -82,6 +82,8 @@ class SensitivityModel:
             mechanism_indices=mechanism_indices, Q=Q, A=A, U_sv=U_sv, S_sv=S_sv, Vt_sv=Vt_sv,
             v_dominant=v_dominant, t=target_fold_vector, chosen_mode_idx=best_r
         )
+
+
         
         if show_plot is 'yes':
             self.plot_pattern_vector(best_sensitivity,
@@ -92,6 +94,25 @@ class SensitivityModel:
 
         self.best_sensitivity = best_sensitivity
         self.v_dominant = v_dominant
+
+        # The Kinematic Efficiency
+        max_sensitivity = np.max(np.abs(best_sensitivity))
+
+        print(f"\nKinematic Efficiency: max |sensitivity| = {max_sensitivity:.6f} radians per nothing (non-dimensionalized)")
+
+        # The Normalized Vector (0 to 1)
+        s_normalized_to_max_sensitivity = np.abs(best_sensitivity) / max_sensitivity
+
+        # Coefficient of Variation (CV = std / mean)
+        cv = np.std(s_normalized_to_max_sensitivity) / np.mean(s_normalized_to_max_sensitivity)
+        cv_percentage = cv * 100
+        print(f"Coefficient of Variation (CV) of normalized sensitivity: {cv:.4f} ({cv_percentage:.2f}%) - lower means more uniform sensitivity across hinges")
+
+        # The Dead Hinge metric
+        min_fold = np.min(s_normalized_to_max_sensitivity)
+        print(f"Dead Hinge Metric (min of normalized sensitivity): {min_fold:.6f} (higher is better, 0 means at least one completely dead hinge)")
+
+
         return best_sensitivity
     
     def check_integration_rigidity(self, num_steps=50, step_size=0.02):
