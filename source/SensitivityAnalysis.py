@@ -808,3 +808,52 @@ class SensitivityModel:
         cbar.set_label(cbar_label, rotation=270, labelpad=15)
 
         plt.show()
+
+    def apply_edge_cuts(self, cut_edges):
+        """
+        Physically disconnects panels along specified edges by duplicating vertices.
+        Must be called AFTER reading the .fold file but BEFORE generating geometry.
+        
+        cut_edges: list of tuples, e.g., [(0, 1), (4, 5)] representing node IDs to cut.
+        """
+        if not cut_edges:
+            return
+
+        print(f"\n--- Applying {len(cut_edges)} Mesh Cuts ---")
+        for edge in cut_edges:
+            # Sort to ensure we match regardless of order
+            u, v = sorted(edge)
+            
+            # Find which panels share this edge
+            shared_panels = []
+            for i, p_nodes in enumerate(self.panel_indices):
+                if u in p_nodes and v in p_nodes:
+                    shared_panels.append(i)
+                    
+            if len(shared_panels) < 2:
+                print(f"  Edge {edge} is a boundary or not shared. Skipping.")
+                continue
+                
+            # We will detach the second panel from the first along this edge
+            p1_idx = shared_panels[0]
+            p2_idx = shared_panels[1]
+            
+            # Duplicate the coordinates in the master list
+            u_new_idx = len(self.coordinates)
+            self.coordinates.append(list(self.coordinates[u])) # Copy the [x,y,z]
+            
+            v_new_idx = len(self.coordinates)
+            self.coordinates.append(list(self.coordinates[v]))
+            
+            # Reassign the nodes in Panel 2 to the new detached vertices
+            new_nodes = []
+            for node_idx in self.panel_indices[p2_idx]:
+                if node_idx == u:
+                    new_nodes.append(u_new_idx)
+                elif node_idx == v:
+                    new_nodes.append(v_new_idx)
+                else:
+                    new_nodes.append(node_idx)
+                    
+            self.panel_indices[p2_idx] = new_nodes
+            print(f"  Cut applied at edge {edge}. Panel {p2_idx} detached and assigned nodes ({u_new_idx}, {v_new_idx}).")
