@@ -65,7 +65,6 @@ if __name__ == "__main__":
 
         # Get the standard deviation of the fold magnitudes
         std_dev = model.get_sensitivity_standard_deviation()
-        print(f"Standard Deviation of Fold Magnitudes: {std_dev}")
 
     except FileNotFoundError:
         print(f"ERROR: Could not find file '{filename}'. Check your path.")
