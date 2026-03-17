@@ -63,6 +63,9 @@ if __name__ == "__main__":
         # Run the analysis normally
         model.analyze_sensitivity(show_plot='yes')
 
+        # Get the standard deviation of the fold magnitudes
+        std_dev = model.get_sensitivity_standard_deviation()
+
     except FileNotFoundError:
         print(f"ERROR: Could not find file '{filename}'. Check your path.")
     except Exception as e:

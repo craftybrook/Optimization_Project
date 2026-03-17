@@ -862,3 +862,32 @@ class SensitivityModel:
                     
             self.panel_indices[p2_idx] = new_nodes
             print(f"  Cut applied at edge {edge}. Panel {p2_idx} detached and assigned nodes ({u_new_idx}, {v_new_idx}).")
+
+    def get_sensitivity_standard_deviation(self, sensitivity_vector=None, use_absolute=True):
+        """
+        Calculates the standard deviation of the hinge sensitivity values.
+        
+        Args:
+            sensitivity_vector: Optional array of sensitivity values. 
+                                If None, uses the last computed self.best_sensitivity.
+            use_absolute: If True, calculates the std dev of the absolute magnitudes 
+                          (ignoring Mountain/Valley directions).
+        """
+        # If no vector is passed in, try to use the one stored in the class
+        if sensitivity_vector is None:
+            if not hasattr(self, 'best_sensitivity') or self.best_sensitivity is None:
+                raise ValueError("No sensitivity data found. Please run analyze_sensitivity() first.")
+            sensitivity_vector = self.best_sensitivity
+            
+        # Decide whether to use absolute magnitudes or raw signed values
+        if use_absolute:
+            values_to_analyze = np.abs(sensitivity_vector)
+        else:
+            values_to_analyze = sensitivity_vector
+            
+        # Calculate the standard deviation using numpy
+        std_dev = np.std(values_to_analyze)
+        
+        print(f"\nSensitivity Standard Deviation: {std_dev:.6f}")
+        
+        return std_dev
