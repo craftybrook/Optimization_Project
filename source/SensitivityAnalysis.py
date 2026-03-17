@@ -3,6 +3,7 @@ import sympy as sp
 import itertools
 import json
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib.patheffects as PathEffects
 from scipy.linalg import eigh
 from matplotlib import animation
@@ -22,23 +23,18 @@ Jake Sutton
 """
 
 class SensitivityModel:
-    def __init__(self, fold_file_path, cut_edges=None):
-        """ 
-        cut_edges: Optional list of tuples defining edges to cut (e.g. [(2,3), (5,6)])
-        """
+    def __init__(self, fold_file_path):
+        """ Upon initializing this class makes the origami pattern, then adds the bars between
+        nodes in a panel to make it rigid, and also slaps on some hinges. Telling it where the hignes
+        are is helpful for calculatring the dihedral angle jacobian. """
         self.coordinates, self.panel_indices, self.crease_info = self.extract_pattern_data_from_fold_file(fold_file_path)
 
-        # --- Apply cuts here, modifying the raw lists ---
-        if cut_edges:
-            self.apply_edge_cuts(cut_edges)
-
-        # Now generate geometry with the (potentially) separated mesh
         self.nodes, self.panels = self.generate_geometry(self.coordinates, self.panel_indices)
 
         self.bars = self.generate_bars()
         self.hinges = self.generate_hinges()
         
-    def analyze_sensitivity(self, show_plot=None):
+    def analyze_sensitivity(self, show_plot=None, plot_title=None,show_colorbar=True, save_path=None):
         """
         Identifies the physical folding mechanism via SVD. Auto-calibrates 
         hinges to align with target M/V assignments from the .fold file.
@@ -70,7 +66,13 @@ class SensitivityModel:
         if recal_results is not None:
             best_sensitivity, v_dominant, U_sv, S_sv, Vt_sv, best_r, dihedral_jacobian, A = recal_results
 
-        # 8. Report & Validate
+        # 8. Non-dimensionalize sensitivity by characteristic length to get units of radians per model-length-unit
+        characteristic_length = self.get_characteristic_length()
+        best_sensitivity = best_sensitivity * characteristic_length
+        
+        print(f"\nNon-dimensionalized sensitivity using characteristic length: {characteristic_length:.4f} units")
+
+        # 9. Report & Validate
         self.report_singular_values(S_sv, best_r)
         self.report_alignment(best_sensitivity, target_fold_vector)
         self.mountain_valley_check(best_sensitivity)
@@ -80,15 +82,278 @@ class SensitivityModel:
             mechanism_indices=mechanism_indices, Q=Q, A=A, U_sv=U_sv, S_sv=S_sv, Vt_sv=Vt_sv,
             v_dominant=v_dominant, t=target_fold_vector, chosen_mode_idx=best_r
         )
+
+
         
-        if show_plot is not None:
-            self.plot_pattern_vector(best_sensitivity, nodal_vectors=v_dominant,
-                                    title="Dominant Folding Mechanism (Sensitivity Vector)",
-                                    normalize=True)
+        if show_plot is 'yes':
+            self.plot_pattern_vector(best_sensitivity,
+                                    title=plot_title,
+                                    normalize=True,
+                                    show_colorbar=show_colorbar,
+                                    save_path=save_path)
 
         self.best_sensitivity = best_sensitivity
         self.v_dominant = v_dominant
+
+        # The Kinematic Efficiency
+        max_sensitivity = np.max(np.abs(best_sensitivity))
+
+        print(f"\nKinematic Efficiency: max |sensitivity| = {max_sensitivity:.6f} radians per nothing (non-dimensionalized)")
+
+        # The Normalized Vector (0 to 1)
+        s_normalized_to_max_sensitivity = np.abs(best_sensitivity) / max_sensitivity
+
+        # Coefficient of Variation (CV = std / mean)
+        cv = np.std(s_normalized_to_max_sensitivity) / np.mean(s_normalized_to_max_sensitivity)
+        cv_percentage = cv * 100
+        print(f"Coefficient of Variation (CV) of normalized sensitivity: {cv:.4f} ({cv_percentage:.2f}%) - lower means more uniform sensitivity across hinges")
+
+        # The Dead Hinge metric
+        min_fold = np.min(s_normalized_to_max_sensitivity)
+        print(f"Dead Hinge Metric (min of normalized sensitivity): {min_fold:.6f} (higher is better, 0 means at least one completely dead hinge)")
+
+
         return best_sensitivity
+    
+    def check_integration_rigidity(self, num_steps=50, step_size=0.02):
+        """
+        Integrates the folding path and tracks the change in hinge lengths
+        (stretching error) for every individual hinge at each iteration,
+        then plots the accumulated error to verify rigid kinematics.
+        """
+        print(f"\n--- Verifying Rigid Kinematics ({num_steps} steps) ---")
+        target_fold_vector = self.build_target_fold_vector()
+        
+        # 1. Store initial coordinates and exact initial hinge lengths
+        original_coords = [n.coordinates.copy() for n in self.nodes]
+        
+        initial_hinge_lengths = []
+        for h in self.hinges:
+            vec = h.node_k.coordinates - h.node_j.coordinates
+            initial_hinge_lengths.append(np.linalg.norm(vec))
+            
+        # Initialize error tracking dictionary
+        hinge_errors = {i: [] for i in range(len(self.hinges))}
+        steps_taken = []
+            
+        # 2. Integration Loop
+        for step in range(num_steps):
+            v_dom = self.get_instantaneous_mechanism(target_fold_vector)
+            
+            if v_dom is None:
+                print(f"Something went wrong... maybe kinematic lock-up reached at step {step}.")
+                break
+                
+            steps_taken.append(step + 1)
+            v_reshaped = v_dom.reshape(-1, 3)
+            
+            # Step the physical nodes forward
+            for i, node in enumerate(self.nodes):
+                node.coordinates = node.coordinates + (v_reshaped[i] * step_size)
+                
+            # --- Track Hinge Stretching for EVERY Hinge ---
+            for i, h in enumerate(self.hinges):
+                vec = h.node_k.coordinates - h.node_j.coordinates
+                current_length = np.linalg.norm(vec)
+                error = abs(current_length - initial_hinge_lengths[i])/initial_hinge_lengths[i]
+                hinge_errors[i].append(error)
+
+        # 3. Reset model back to pristine flat state
+        for i, node in enumerate(self.nodes):
+            node.coordinates = original_coords[i]
+            
+        print("Rigidity check complete. Generating error plot...")
+
+        # 4. Plot the tracked errors
+        plt.figure(figsize=(10, 6))
+        for i in range(len(self.hinges)):
+            assignment = self.hinges[i].fold_assignment
+            plt.plot(steps_taken, hinge_errors[i], label=f'Hinge {i} ({assignment})', marker='.', linewidth=1.5)
+
+        plt.title(f"Euler Integration Drift: Hinge Line Stretching (Step Size: {step_size})")
+        plt.xlabel("Integration Step")
+        plt.ylabel("Absolute Length Error (units)")
+        
+        # Using a scientific notation formatter for the Y-axis since the errors are usually tiny
+        plt.ticklabel_format(axis='y', style='sci', scilimits=(0,0)) 
+        
+        plt.grid(True, which="both", linestyle="--", alpha=0.6)
+        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.tight_layout()
+        plt.show()
+
+    def animate_nonlinear_folding(self, num_steps=1000, step_size=0.01, interval=50):
+        """
+        Integrates the folding path by re-evaluating the SVD at every frame.
+        Nodes follow true nonlinear arcs. No panel stretching occurs.
+        """
+        print(f"\nIntegrating folding path ({num_steps} steps)...")
+        
+        target_fold_vector = self.build_target_fold_vector()
+        
+        # Store original coordinates so we don't permanently ruin the model
+        original_coords = [n.coordinates.copy() for n in self.nodes]
+        
+        trajectory = []
+        trajectory.append(np.array(original_coords))
+
+        # --- Integration Loop ---
+        for step in range(num_steps):
+            v_dom = self.get_instantaneous_mechanism(target_fold_vector)
+            
+            if v_dom is None:
+                print(f"Kinematic lock-up reached at step {step}. Stopping integration.")
+                break
+                
+            v_reshaped = v_dom.reshape(-1, 3)
+            
+            # Update the physical nodes
+            for i, node in enumerate(self.nodes):
+                node.coordinates = node.coordinates + (v_reshaped[i] * step_size)
+                
+            # Save the new state
+            trajectory.append(np.array([n.coordinates.copy() for n in self.nodes]))
+
+        # Reset model to original state
+        for i, node in enumerate(self.nodes):
+            node.coordinates = original_coords[i]
+
+        print("Integration complete. Rendering animation...")
+
+        # --- Setup Animation ---
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_title("Nonlinear Rigid Folding (Iterative SVD)")
+        ax.axis('off')
+
+        # Use the final folded state to set the camera bounding box
+        max_coords = trajectory[-1]
+        all_coords = np.vstack((original_coords, max_coords))
+        max_range = np.ptp(all_coords, axis=0).max() / 2.0
+        mid = np.mean(original_coords, axis=0)
+        ax.set_xlim(mid[0] - max_range, mid[0] + max_range)
+        ax.set_ylim(mid[1] - max_range, mid[1] + max_range)
+        ax.set_zlim(mid[2] - max_range, mid[2] + max_range)
+
+        # Initialize lines
+        bar_lines = [ax.plot([], [], [], color='black', alpha=0.3, linewidth=1)[0] for _ in self.bars]
+        hinge_lines = [ax.plot([], [], [], color='blue' if h.fold_assignment == 'M' else 'red', linewidth=3)[0] for h in self.hinges]
+
+        def update(frame):
+            # Ping-pong loop calculation
+            max_frame = len(trajectory) - 1
+            cycle_length = max_frame * 2
+            current_frame = frame % cycle_length
+            if current_frame > max_frame:
+                current_frame = cycle_length - current_frame # reverse direction
+                
+            current_coords = trajectory[current_frame]
+
+            for i, bar in enumerate(self.bars):
+                p1, p2 = current_coords[bar.nodes[0].id], current_coords[bar.nodes[1].id]
+                bar_lines[i].set_data([p1[0], p2[0]], [p1[1], p2[1]])
+                bar_lines[i].set_3d_properties([p1[2], p2[2]])
+
+            for i, h in enumerate(self.hinges):
+                p1, p2 = current_coords[h.node_j.id], current_coords[h.node_k.id]
+                hinge_lines[i].set_data([p1[0], p2[0]], [p1[1], p2[1]])
+                hinge_lines[i].set_3d_properties([p1[2], p2[2]])
+
+            return bar_lines + hinge_lines
+
+        ani = animation.FuncAnimation(fig, update, frames=len(trajectory)*2, interval=interval, blit=False)
+        plt.show()
+
+    def get_instantaneous_mechanism(self, target_fold_vector):
+        """
+        A silent, streamlined version of analyze_sensitivity used purely for 
+        iterative path integration. Returns the normalized displacement vector.
+        """
+        J = self.build_dihedral_jacobian()
+        C = self.build_constraint_matrix()
+
+        _, sv, Vh = np.linalg.svd(C)
+        
+        # Isolate mechanisms (thresholds might need tuning once out of flat state)
+        mechanism_indices = []
+        for i in range(Vh.shape[0]):
+            s_val = sv[i] if i < len(sv) else 0.0
+            if s_val < 1e-6: # Relaxed slightly for numerical drift during integration
+                v = Vh[i, :]
+                fold_changes = J @ v
+                if np.sum(np.abs(fold_changes)) >= 1e-5:
+                    mechanism_indices.append(i)
+
+        if not mechanism_indices:
+            return None # Pattern has locked up (kinematic singularity)
+
+        Q = Vh[mechanism_indices, :]
+        A = J @ Q.T
+
+        U_sv, S_sv, Vt_sv = np.linalg.svd(A, full_matrices=False)
+
+        # Find best match to target fold vector
+        best_r = 0
+        best_cos = -1.0
+        if np.linalg.norm(target_fold_vector) > 1e-12:
+            for r in range(len(S_sv)):
+                if S_sv[r] < 1e-3 * S_sv[0]: continue
+                cos = np.dot(U_sv[:, r], target_fold_vector) / (np.linalg.norm(U_sv[:, r]) * np.linalg.norm(target_fold_vector))
+                if abs(cos) > best_cos:
+                    best_cos = abs(cos)
+                    best_r = r
+
+        v_dominant = Q.T @ Vt_sv[best_r, :]
+        best_sens = U_sv[:, best_r] * S_sv[best_r]
+
+        # Keep the global sign consistent with the target
+        if np.dot(best_sens, target_fold_vector) < 0:
+            v_dominant = -v_dominant
+
+        return v_dominant
+    
+    def step_and_reanalyze(self, step_scale=0.03, show_plot=False):
+        """
+        Pushes the flat pattern slightly into the 3D deployed state using the 
+        linear tangent vector (v_dominant), and re-runs the sensitivity analysis.
+        This breaks the flat-state singularity.
+        """
+        print(f"\n{'='*60}")
+        print(f" STEPPING OUT OF FLAT STATE (Step Scale: {step_scale})")
+        print(f"{'='*60}")
+
+        # 1. Ensure we have a dominant mode to follow from the flat state
+        if not hasattr(self, 'v_dominant') or self.v_dominant is None:
+            print("Running initial flat-state analysis to find deployment path...")
+            self.analyze_sensitivity(show_plot=False)
+            
+        # 2. Reshape the 1D displacement vector into (N, 3) for the nodes
+        v_reshaped = self.v_dominant.reshape(-1, 3)
+
+        # 3. Apply the displacement to every node
+        for i, node in enumerate(self.nodes):
+            node.coordinates = node.coordinates + (v_reshaped[i] * step_scale)
+
+        print(f"Nodes perturbed by {step_scale} * v_dominant. Re-running analysis on 3D geometry...\n")
+        
+        # 4. Re-run the analysis on the now-3D geometry
+        new_sensitivity = self.analyze_sensitivity(show_plot=show_plot)
+        
+        return new_sensitivity
+
+    def get_characteristic_length(self):
+        """
+        Calculates the bounding radius of the array from its geometric center
+        using the raw .fold file coordinates.
+        """
+        coords = np.array(self.coordinates)
+        center = np.mean(coords, axis=0) # Find the geometric center (X,Y,Z)
+        
+        # Calculate the distance from the center to every single vertex
+        distances = np.linalg.norm(coords - center, axis=1)
+        
+        # The characteristic length is the distance to the furthest vertex
+        return np.max(distances)
     
     def isolate_mechanism_subspace(self, singular_values, Vh, dihedral_jacobian):
         """Filters the null space to remove pure rigid body motions and zero-energy noise."""
@@ -592,38 +857,38 @@ class SensitivityModel:
         unique_edges = set()
         bars = []
 
+        for panel in self.panels:
+            # Connect every node to every other node in this specific panel
+            for node_a, node_b in itertools.combinations(panel.nodes,2):
+
+                # Sort IDs to ensure Edge(1,2) = Edge (2,1)
+                edge_id = tuple(sorted((node_a.id, node_b.id)))
+
+                if edge_id not in unique_edges:
+                    unique_edges.add(edge_id)
+                    #Add the rigid bar
+                    bars.append(BarElement(node_a, node_b))
+
         # for panel in self.panels:
-        #     # Connect every node to every other node in this specific panel
-        #     for node_a, node_b in itertools.combinations(panel.nodes,2):
+        #     nodes = panel.nodes
+        #     n = len(nodes)
 
-        #         # Sort IDs to ensure Edge(1,2) = Edge (2,1)
-        #         edge_id = tuple(sorted((node_a.id, node_b.id)))
-
+        #     # 1. All perimeter edges
+        #     for i in range(n):
+        #         a, b = nodes[i], nodes[(i + 1) % n]
+        #         edge_id = tuple(sorted((a.id, b.id)))
         #         if edge_id not in unique_edges:
         #             unique_edges.add(edge_id)
-        #             #Add the rigid bar
-        #             bars.append(BarElement(node_a, node_b))
+        #             bars.append(BarElement(a, b))
 
-        for panel in self.panels:
-            nodes = panel.nodes
-            n = len(nodes)
-
-            # 1. All perimeter edges
-            for i in range(n):
-                a, b = nodes[i], nodes[(i + 1) % n]
-                edge_id = tuple(sorted((a.id, b.id)))
-                if edge_id not in unique_edges:
-                    unique_edges.add(edge_id)
-                    bars.append(BarElement(a, b))
-
-            # 2. Fan diagonals from node 0 to nodes 2, 3, ..., n-2
-            #    (node 0→1 and node 0→n-1 are already perimeter edges)
-            for i in range(2, n - 1):
-                a, b = nodes[0], nodes[i]
-                edge_id = tuple(sorted((a.id, b.id)))
-                if edge_id not in unique_edges:
-                    unique_edges.add(edge_id)
-                    bars.append(BarElement(a, b))
+        #     # 2. Fan diagonals from node 0 to nodes 2, 3, ..., n-2
+        #     #    (node 0→1 and node 0→n-1 are already perimeter edges)
+        #     for i in range(2, n - 1):
+        #         a, b = nodes[0], nodes[i]
+        #         edge_id = tuple(sorted((a.id, b.id)))
+        #         if edge_id not in unique_edges:
+        #             unique_edges.add(edge_id)
+        #             bars.append(BarElement(a, b))
 
         return bars
 
@@ -692,37 +957,23 @@ class SensitivityModel:
         
         return hinges
     
-    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=True, show_hinge_labels=True, title="Pattern", normalize=False):
+    def plot_pattern_vector(self, sensitivity_vector=None, nodal_vectors=None, vector_scale=1.0, vector_color='green', show_node_labels=False, show_hinge_labels=False, title="Pattern", show_colorbar=True, normalize=True, save_path=None):
         """
         Plot the origami pattern with:
-          - Bars drawn in light grey
-          - Hinges color-coded by sensitivity (blue = Mountain/+, red = Valley/-)
-          - Raw sensitivity value labeled on every hinge (always shown regardless of normalize)
-          - Optional nodal displacement vectors drawn as quiver arrows
-
-        Parameters
-        ----------
-        sensitivity_vector : array-like, optional
-            One value per hinge. Drives hinge color and label.
-        nodal_vectors : array-like, optional
-            Flat 1D array of length 3*n_nodes (or shape (n_nodes, 3)).
-            Drawn as quiver arrows at each node to show the null-space
-            displacement direction.
-        vector_scale : float
-            Arrow length scale for the quiver plot.
-        vector_color : str
-            Color for the quiver arrows.
-        normalize : bool
-            If True, the colormap is normalized to [-1, +1].
-            Hinge labels always show the original (un-normalized) sensitivity.
+          - Pattern boundary edges drawn in light grey (internal cross-bars hidden).
+          - Top-down view locked for publication-ready figures.
+          - Hinges colored strictly by absolute fold rate magnitude (0 to 1).
+          - Hinge styles based on direction: Mountain (+) = Solid, Valley (-) = Dashed.
+          - Optional nodal displacement vectors drawn as quiver arrows.
         """
+        import matplotlib.lines as mlines
+        import matplotlib.colors as mcolors # Added this so your custom colormap works!
+        
         plt.close('all')
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
 
-        # --- Sensitivity data ---
-        # raw_sens  → original values; always used for hinge labels
-        # plot_sens → may be scaled to [-1,+1]; drives the colormap only
+        # --- Sensitivity data & Normalization ---
         raw_sens = np.zeros(len(self.hinges))
         if sensitivity_vector is not None:
             raw_sens = np.array(sensitivity_vector).flatten()
@@ -732,17 +983,26 @@ class SensitivityModel:
             max_abs_val = 1.0
 
         if normalize:
-            plot_sens = raw_sens / max_abs_val
+            # Scale absolute magnitudes from 0 to 1
+            abs_sens = np.abs(raw_sens) / max_abs_val
             limit = 1.0
         else:
-            plot_sens = raw_sens.copy()
+            abs_sens = np.abs(raw_sens)
             limit = max_abs_val
+        
+        # --- Color map ---
+        # Viridis is the academic standard for sequential data (0 to 1)
+        base_cmap = plt.cm.viridis
 
-        # --- Color map (blue = positive/mountain, red = negative/valley) ---
-        cmap = plt.cm.coolwarm_r
-        cnorm = plt.Normalize(-limit, limit)
+        # Sample the colormap from 0.3 to 1.0 (skipping the lightest 30%)
+        # Adjust 0.3 up or down to make the baseline yellow darker or lighter
+        color_subset = base_cmap(np.linspace(0.3, .99, 256))
+        
+        # Create a brand new, darker colormap
+        cmap = mcolors.ListedColormap(color_subset)
+        cnorm = plt.Normalize(0, limit)
 
-        # --- Nodes & Bars ---
+        # --- Nodes ---
         xs = [n.coordinates[0] for n in self.nodes]
         ys = [n.coordinates[1] for n in self.nodes]
         zs = [n.coordinates[2] for n in self.nodes]
@@ -753,47 +1013,66 @@ class SensitivityModel:
                 ax.text(n.coordinates[0], n.coordinates[1], n.coordinates[2],
                         f"{n.id}", fontsize=8, color='grey')
 
-        for bar in self.bars:
-            p1, p2 = bar.nodes[0].coordinates, bar.nodes[1].coordinates
-            ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
-                    color='black', alpha=0.3, linewidth=1)
+        # --- Pattern Boundary Outlines (No Internal Cross Bars) ---
+        edge_panel_counts = {}
+        for panel in self.panels:
+            num_nodes = len(panel.nodes)
+            for i in range(num_nodes):
+                node_a = panel.nodes[i]
+                node_b = panel.nodes[(i + 1) % num_nodes]
+                edge_id = tuple(sorted((node_a.id, node_b.id)))
+                edge_panel_counts[edge_id] = edge_panel_counts.get(edge_id, 0) + 1
+        
+        plotted_edges = set()
+        for panel in self.panels:
+            num_nodes = len(panel.nodes)
+            for i in range(num_nodes):
+                node_a = panel.nodes[i]
+                node_b = panel.nodes[(i + 1) % num_nodes]
+                edge_id = tuple(sorted((node_a.id, node_b.id)))
+                
+                # Plot only if it's a true boundary edge (belongs to 1 panel)
+                if edge_panel_counts[edge_id] == 1 and edge_id not in plotted_edges:
+                    plotted_edges.add(edge_id)
+                    p1, p2 = node_a.coordinates, node_b.coordinates
+                    ax.plot([p1[0], p2[0]], [p1[1], p2[1]], [p1[2], p2[2]],
+                            color='black', alpha=0.5, linewidth=1.5)
 
         # --- Nodal displacement vectors (quiver) ---
         if nodal_vectors is not None:
             nv = np.array(nodal_vectors)
-            # Accept a flat 1D array and reshape it to (N, 3)
             if nv.ndim == 1 and len(nv) == 3 * len(self.nodes):
                 nv = nv.reshape(-1, 3)
             if nv.ndim == 2 and len(nv) == len(self.nodes) and nv.shape[1] == 3:
                 ax.quiver(xs, ys, zs,
                           nv[:, 0], nv[:, 1], nv[:, 2],
-                          color=vector_color,
-                          length=vector_scale,
-                          normalize=False,
-                          arrow_length_ratio=0.15)
-            else:
-                print(f"Warning: nodal_vectors shape {nv.shape} doesn't match "
-                      f"({len(self.nodes)}, 3). Skipping quiver plot.")
+                          color=vector_color, length=vector_scale,
+                          normalize=False, arrow_length_ratio=0.15)
 
-        # --- Hinges: color-coded lines + sensitivity labels ---
+        # --- Hinges: Color = Magnitude, LineStyle = Mountain/Valley ---
         for h_id, h in enumerate(self.hinges):
             p_j = h.node_j.coordinates
             p_k = h.node_k.coordinates
-            color = cmap(cnorm(plot_sens[h_id]))
+            
+            raw_val = raw_sens[h_id]
+            mag_val = abs_sens[h_id]
+            
+            # Mountain (+) = Solid, Valley (-) = Dashed
+            l_style = '-' if raw_val >= -1e-9 else (0, (2.0, 0.35)) 
+            
+            color = cmap(cnorm(mag_val))
 
             ax.plot([p_j[0], p_k[0]], [p_j[1], p_k[1]], [p_j[2], p_k[2]],
-                    color=color, linestyle='-', linewidth=3.0, alpha=0.9)
+                    color=color, linestyle=l_style, linewidth=5.5, alpha=0.95)
 
             if show_hinge_labels:
                 mid = (p_j + p_k) / 2
-                # Always show the raw value so the user sees the actual physics,
-                # even when the colormap has been normalized.
-                label_text = f"H{h_id}\n{raw_sens[h_id]:.3f}"
+                label_text = f"H{h_id}"
                 ax.text(mid[0], mid[1], mid[2], label_text,
-                        color=color, fontsize=9, fontweight='bold',
+                        color='black', fontsize=10, fontweight='bold',
                         path_effects=[PathEffects.withStroke(linewidth=2, foreground='white')])
 
-        # --- Axis limits ---
+        # --- Axis limits & Top-Down Publication View ---
         all_coords = np.array([xs, ys, zs])
         max_range = np.ptp(all_coords, axis=1).max() / 2.0
         mid_x = np.mean(all_coords[0])
@@ -803,14 +1082,29 @@ class SensitivityModel:
         ax.set_ylim(mid_y - max_range, mid_y + max_range)
         ax.set_zlim(mid_z - max_range, mid_z + max_range)
 
-        ax.set_title(title)
+        ax.view_init(elev=90, azim=-90)
+        ax.set_axis_off()
+        ax.set_title(title, pad=0, y=0.95, fontsize=16, fontweight='bold')
 
-        # --- Colorbar ---
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
-        sm.set_array([])
-        cbar = plt.colorbar(sm, ax=ax, shrink=0.5)
-        cbar_label = 'Normalized Mode (-1 to +1)' if normalize else 'Hinge Sensitivity (rad)'
-        cbar.set_label(cbar_label, rotation=270, labelpad=15)
+        # --- Colorbar (Magnitude) ---
+        if show_colorbar:
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
+            sm.set_array([])
+            cbar = plt.colorbar(sm, ax=ax, shrink=0.6,aspect=15, pad=0.0005)
+            cbar.ax.tick_params(labelsize=20)
+            # You commented these out in your script, but you can turn them back on anytime!
+            # cbar_label = 'Absolute Normalized Fold Rate' if normalize else 'Absolute Hinge Sensitivity (rad/unit)'
+            # cbar.set_label(cbar_label, rotation=270, labelpad=20)
+            cbar.outline.set_visible(False)
+            
+        fig.tight_layout(pad=0)
+        
+        # --- Automated Save Logic ---
+        if save_path:
+            # bbox_inches='tight' crops out all the extra white space
+            # transparent=True removes the white background so it blends perfectly into the document
+            fig.savefig(save_path, format='pdf', bbox_inches='tight', transparent=True)
+            print(f"Saved high-res figure to: {save_path}")
 
         plt.show()
 

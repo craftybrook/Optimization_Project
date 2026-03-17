@@ -52,7 +52,6 @@ class BarElement:
         # Return the row for the compatibility matrix
         return row_vector
 
-
 class HingeElement:
     def __init__(self, wing_nodes_1, node_j, node_k, wing_nodes_2, fold_assignment="U"):
         """
