@@ -62,27 +62,6 @@ if __name__ == "__main__":
 
         # Run the analysis normally
         model.analyze_sensitivity(show_plot='yes')
-        
-        # filename1 = "bloom_yoshimura1.fold"
-        # set_up_bloom(m=5,h=1,s=1,file_name=filename1) # Generates bloom_yoshimura1.fold in the current directory
-
-        # bloom = SensitivityModel(filename)
-        # bloom.analyze_sensitivity()
-        # plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
-
-        # bloom1 = SensitivityModel(filename1)
-        # bloom1.analyze_sensitivity()
-        # plt.close('all')  # close the 3D pattern plot from analyze_sensitivity
-
-        # sensitivities = {
-        #     "bloom_yoshimura" : bloom.best_sensitivity,
-        #     "flasher" : model_t_flasher.best_sensitivity,
-        # }
-
-        # fig, ax = plot_sensitivity_violin(sensitivities)
-        # fig.savefig("sensitivity_violin.pdf", bbox_inches="tight")
-        # plt.show()  # display the violin plot
-        
 
     except FileNotFoundError:
         print(f"ERROR: Could not find file '{filename}'. Check your path.")
