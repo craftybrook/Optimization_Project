@@ -825,7 +825,7 @@ class SensitivityModel:
             This makes sure that if Node 2 moves, it moves for both panels"""
 
             p_nodes = [nodes[k] for k in idxs]
-            panels.append(Panel(i, p_nodes))
+            panels.append(Panel(i, p_nodes)) # type: ignore
 
             
         return panels
@@ -843,7 +843,7 @@ class SensitivityModel:
             y = coordinate_list[1]
             z = coordinate_list[2]
 
-            new_node = Node(count, x ,y ,z)
+            new_node = Node(count, x ,y ,z) # type: ignore
             nodes.append(new_node)
             count += 1
 
@@ -872,7 +872,7 @@ class SensitivityModel:
                 if edge_id not in unique_edges:
                     unique_edges.add(edge_id)
                     #Add the rigid bar
-                    bars.append(BarElement(node_a, node_b))
+                    bars.append(BarElement(node_a, node_b)) # type: ignore
 
         # for panel in self.panels:
         #     nodes = panel.nodes
@@ -958,7 +958,7 @@ class SensitivityModel:
             wing_nodes_1 = [n for n in panel1.nodes if n.id not in edge_key]
             wing_nodes_2 = [n for n in panel2.nodes if n.id not in edge_key]
 
-            hinges.append(HingeElement(wing_nodes_1, node_j, node_k, wing_nodes_2, assignment))
+            hinges.append(HingeElement(wing_nodes_1, node_j, node_k, wing_nodes_2, assignment)) # type: ignore
         
         return hinges
     
