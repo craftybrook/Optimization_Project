@@ -53,18 +53,19 @@ if __name__ == "__main__":
     #                              normalize=True)
     try:
         filename = "bloom_yoshimura.fold"
-        set_up_bloom(m=5,h=1,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
+        set_up_bloom(m=6,h=1,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
         # Define the edges you want to cut (using the node indices)
         inactive_hinges = [(3, 4), (10, 11)]
 
         # Initialize the model with the cuts
-        model = SensitivityModel("model_t_flasher.fold", cut_edges=inactive_hinges)
+        model = SensitivityModel("bloom_yoshimura.fold", cut_edges=inactive_hinges)
 
         # Run the analysis normally
         model.analyze_sensitivity(show_plot='yes')
 
         # Get the standard deviation of the fold magnitudes
         std_dev = model.get_sensitivity_standard_deviation()
+        print(f"Standard Deviation of Fold Magnitudes: {std_dev}")
 
     except FileNotFoundError:
         print(f"ERROR: Could not find file '{filename}'. Check your path.")
