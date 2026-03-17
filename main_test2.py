@@ -52,14 +52,16 @@ if __name__ == "__main__":
     #                              title="Dominant Folding Mechanism (Sensitivity Vector)",
     #                              normalize=True)
     try:
+        filename = "bloom_yoshimura.fold"
+        set_up_bloom(m=5,h=1,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
+        # Define the edges you want to cut (using the node indices)
+        inactive_hinges = [(3, 4), (10, 11)]
 
-        filename = "clean4_brooklyn_cut.fold"
-        model_t_flasher = SensitivityModel(filename)
-        model_t_flasher.analyze_sensitivity(show_plot=1)
-        
+        # Initialize the model with the cuts
+        model = SensitivityModel("model_t_flasher.fold", cut_edges=inactive_hinges)
 
-        # filename = "bloom_yoshimura.fold"
-        # set_up_bloom(m=5,h=1,s=1,file_name=filename) # Generates bloom_yoshimura.fold in the current directory
+        # Run the analysis normally
+        model.analyze_sensitivity(show_plot='yes')
         
         # filename1 = "bloom_yoshimura1.fold"
         # set_up_bloom(m=5,h=1,s=1,file_name=filename1) # Generates bloom_yoshimura1.fold in the current directory
