@@ -23,11 +23,16 @@ Jake Sutton
 """
 
 class SensitivityModel:
-    def __init__(self, fold_file_path):
+    def __init__(self, fold_file_path, cut_edges=None): # <-- ADD cut_edges=None HERE
         """ Upon initializing this class makes the origami pattern, then adds the bars between
         nodes in a panel to make it rigid, and also slaps on some hinges. Telling it where the hignes
         are is helpful for calculatring the dihedral angle jacobian. """
         self.coordinates, self.panel_indices, self.crease_info = self.extract_pattern_data_from_fold_file(fold_file_path)
+
+        # --- ADD THIS BLOCK TO APPLY THE CUTS ---
+        if cut_edges:
+            self.apply_edge_cuts(cut_edges)
+        # ----------------------------------------
 
         self.nodes, self.panels = self.generate_geometry(self.coordinates, self.panel_indices)
 
