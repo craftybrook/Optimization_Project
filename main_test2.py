@@ -31,7 +31,7 @@ def set_up_bloom(m=5,h=1,s=1,file_name=None, show_plot=None, Show_Origin=1, Show
     if show_plot is not None:
         plt.close('all')
 
-    bloom.export_to_fold(filename=file_name)
+    bloom.export_to_fold(filename=file_name) # type: ignore
 
 #%% Bloom Yoshimura Y6_1
 filename_Y6_1 = "Y6_1.fold"
