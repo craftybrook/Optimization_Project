@@ -49,3 +49,4 @@ model.analyze_sensitivity(show_plot='yes')
 std_dev = model.get_sensitivity_standard_deviation()
 
 plt.close('all')
+# %%
