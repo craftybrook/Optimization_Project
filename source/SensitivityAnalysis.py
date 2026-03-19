@@ -75,6 +75,7 @@ class SensitivityModel:
         characteristic_length = self.get_characteristic_length()
         best_sensitivity = best_sensitivity * characteristic_length
         
+        """
         print(f"\nNon-dimensionalized sensitivity using characteristic length: {characteristic_length:.4f} units")
 
         # 9. Report & Validate
@@ -87,8 +88,7 @@ class SensitivityModel:
             mechanism_indices=mechanism_indices, Q=Q, A=A, U_sv=U_sv, S_sv=S_sv, Vt_sv=Vt_sv,
             v_dominant=v_dominant, t=target_fold_vector, chosen_mode_idx=best_r
         )
-
-
+        """
         
         if show_plot is 'yes':
             self.plot_pattern_vector(best_sensitivity,

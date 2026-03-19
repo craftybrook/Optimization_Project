@@ -38,7 +38,6 @@ set_up_bloom(m=6,h=1,s=1,file_name=filename_Y6_1)
 
 # 1. FIRST, load the uncut model to see what edges actually exist
 model_uncut = SensitivityModel(filename_Y6_1)  # <-- using the correct file!
-#print(f"Hinges without cuts: {len(model_uncut.hinges)}")
 
 print("--- VALID INTERNAL EDGES YOU CAN CUT ---")
 for i, h in enumerate(model_uncut.hinges):
@@ -58,8 +57,6 @@ print(f"Hinges with cuts: {len(model_cut.hinges)}")
 
 # Run the analysis normally
 model_cut.analyze_sensitivity(show_plot='yes')
-#print(f"Hinges with cuts: {len(model_cut.hinges)}")
-
 
 plt.close('all')
 
