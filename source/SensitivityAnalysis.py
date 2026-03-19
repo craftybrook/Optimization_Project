@@ -92,7 +92,7 @@ class SensitivityModel:
         
         if show_plot is 'yes':
             self.plot_pattern_vector(best_sensitivity,
-                                    title=plot_title,
+                                    title=plot_title, # type: ignore
                                     normalize=True,
                                     show_colorbar=show_colorbar,
                                     save_path=save_path)
@@ -257,12 +257,12 @@ class SensitivityModel:
             for i, bar in enumerate(self.bars):
                 p1, p2 = current_coords[bar.nodes[0].id], current_coords[bar.nodes[1].id]
                 bar_lines[i].set_data([p1[0], p2[0]], [p1[1], p2[1]])
-                bar_lines[i].set_3d_properties([p1[2], p2[2]])
+                bar_lines[i].set_3d_properties([p1[2], p2[2]]) # type: ignore
 
             for i, h in enumerate(self.hinges):
                 p1, p2 = current_coords[h.node_j.id], current_coords[h.node_k.id]
                 hinge_lines[i].set_data([p1[0], p2[0]], [p1[1], p2[1]])
-                hinge_lines[i].set_3d_properties([p1[2], p2[2]])
+                hinge_lines[i].set_3d_properties([p1[2], p2[2]]) # type: ignore
 
             return bar_lines + hinge_lines
 
