@@ -52,3 +52,12 @@ model.animate_nonlinear_folding()
 
 plt.close('all')
 
+# Model WITHOUT cuts
+model_uncut = SensitivityModel("bloom_yoshimura.fold")
+print(f"Hinges without cuts: {len(model_uncut.hinges)}")
+
+# Model WITH cuts
+inactive_hinges = [(3, 4), (10, 11)]
+model_cut = SensitivityModel("bloom_yoshimura.fold", cut_edges=inactive_hinges)
+print(f"Hinges with cuts: {len(model_cut.hinges)}")
+
