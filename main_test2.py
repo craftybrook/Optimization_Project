@@ -32,32 +32,39 @@ def set_up_bloom(m=5,h=1,s=1,file_name=None, show_plot=None, Show_Origin=1, Show
 
     bloom.export_to_fold(filename=file_name) # type: ignore
 
-# Bloom Yoshimura Y6_1 generation
+#%% Bloom Yoshimura Y6_1
 filename_Y6_1 = "Y6_1.fold"
 set_up_bloom(m=6,h=1,s=1,file_name=filename_Y6_1)
-# Define the edges you want to cut (using the node indices)
-inactive_hinges = [(3, 4), (10, 11)]
 
-# Initialize the model with the cuts
-model = SensitivityModel("bloom_yoshimura.fold", cut_edges=inactive_hinges)
+# 1. FIRST, load the uncut model to see what edges actually exist
+model_uncut = SensitivityModel(filename_Y6_1)  # <-- using the correct file!
+#print(f"Hinges without cuts: {len(model_uncut.hinges)}")
+
+print("--- VALID INTERNAL EDGES YOU CAN CUT ---")
+for i, h in enumerate(model_uncut.hinges):
+    print(f"Hinge {i}: ({h.node_j.id}, {h.node_k.id})")
+print("----------------------------------------\n")
+
+
+# 2. Pick two edges from the list printed above and put them here:
+# (Replace these with real pairs printed to your console)
+inactive_hinges = [(1, 4), (2, 4)] 
+
+# 3. NOW run the model with the cuts
+model_cut = SensitivityModel(filename_Y6_1, cut_edges=inactive_hinges)
+
+print(f"Hinges without cuts: {len(model_uncut.hinges)}")
+print(f"Hinges with cuts: {len(model_cut.hinges)}")
 
 # Run the analysis normally
-model.analyze_sensitivity(show_plot='yes')
+model_cut.analyze_sensitivity(show_plot='yes')
+#print(f"Hinges with cuts: {len(model_cut.hinges)}")
 
-# Get the standard deviation of the fold magnitudes
-std_dev = model.get_sensitivity_standard_deviation()
-
-# Animate
-model.animate_nonlinear_folding()
 
 plt.close('all')
 
-# Model WITHOUT cuts
-model_uncut = SensitivityModel("bloom_yoshimura.fold")
-print(f"Hinges without cuts: {len(model_uncut.hinges)}")
+# Get the standard deviation of the fold magnitudes
+#std_dev = model_cut.get_sensitivity_standard_deviation()
 
-# Model WITH cuts
-inactive_hinges = [(3, 4), (10, 11)]
-model_cut = SensitivityModel("bloom_yoshimura.fold", cut_edges=inactive_hinges)
-print(f"Hinges with cuts: {len(model_cut.hinges)}")
-
+# Animate
+#model_cut.animate_nonlinear_folding()
