@@ -61,7 +61,7 @@ model_cut.analyze_sensitivity(show_plot='yes')
 plt.close('all')
 
 # Get the standard deviation of the fold magnitudes
-#std_dev = model_cut.get_sensitivity_standard_deviation()
+std_dev = model_cut.get_sensitivity_standard_deviation()
 
 # Animate
-#model_cut.animate_nonlinear_folding()
+model_cut.animate_nonlinear_folding()
